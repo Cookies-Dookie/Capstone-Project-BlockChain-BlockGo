@@ -1,0 +1,9 @@
+{
+  "address": "registrar-chaincode:9999",
+  "dial_timeout": "10s",
+  "tls_required": false,
+  "client_auth_required": false,
+  "client_key": "",
+  "client_cert": "",
+  "root_cert": ""
+}
