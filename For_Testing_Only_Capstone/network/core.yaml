@@ -1,0 +1,27 @@
+peer:
+  id: peer0
+  networkId: dev
+  listenAddress: 0.0.0.0:7051
+  addressAutoDetect: false
+  gomaxprocs: -1
+  tls:
+    enabled: true
+    clientAuthRequired: false
+    cert:
+      file: /etc/hyperledger/fabric/tls/server.crt
+    key:
+      file: /etc/hyperledger/fabric/tls/server.key
+    rootcert:
+      file: /etc/hyperledger/fabric/tls/ca.crt
+    clientRootCAs:
+      files:
+        - /etc/hyperledger/fabric/tls/ca.crt
+bccsp:
+  default: SW
+  sw:
+    hash: SHA2
+    security: 256
+    filekeystore:
+      keystore: /var/hyperledger/msp/keystore
+logging:
+  level: info

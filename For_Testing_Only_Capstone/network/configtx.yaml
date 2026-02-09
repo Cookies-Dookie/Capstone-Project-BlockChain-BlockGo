@@ -1,0 +1,128 @@
+---
+Organizations:
+  - &OrdererOrg
+    Name: OrdererOrg
+    ID: OrdererMSP
+    MSPDir: /opt/fabric-config/crypto-config/ordererOrganizations/capstone.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+
+  - &Org1
+    Name: Org1MSP
+    ID: Org1MSP
+    MSPDir: /opt/fabric-config/crypto-config/peerOrganizations/registrar.capstone.com/msp
+    AnchorPeers:
+      - Host: peer0.registrar.capstone.com
+        Port: 7051
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('Org1MSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('Org1MSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('Org1MSP.member')"
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_0: true
+
+Application: &ApplicationDefaults
+  Organizations:
+    - *Org1
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  Addresses:
+    - orderer.capstone.com:7050
+  EtcdRaft:
+    Consenters:
+      - Host: orderer.capstone.com
+        Port: 7050
+        ClientTLSCert: /opt/fabric-config/crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/server.crt
+        ServerTLSCert: /opt/fabric-config/crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/server.crt
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 10485760
+    PreferredMaxBytes: 2097152
+  Organizations:
+    - *OrdererOrg
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+  Capabilities:
+    <<: *OrdererCapabilities
+
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+Profiles:
+  BasicChannel:
+    <<: *ChannelDefaults
+    Consortium: SampleConsortium
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *Org1
+      Capabilities:
+        <<: *ApplicationCapabilities
