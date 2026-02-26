@@ -1,0 +1,44 @@
+peer:
+  id: peer0.registrar.capstone.com
+  networkId: dev
+  listenAddress: 0.0.0.0:7051
+  chaincodeListenAddress: 0.0.0.0:7052 
+  addressAutoDetect: false
+  gomaxprocs: -1
+  
+  tls:
+    enabled: true
+    clientAuthRequired: false
+    cert:
+      file: /etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/server.crt
+    key:
+      file: /etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/server.key
+    rootcert:
+      file: /etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/ca.crt
+    clientRootCAs:
+      files:
+        - /etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/ca.crt
+
+  externalBuilders:
+    - path: /usr/local/bin/ccaas_builder
+      name: ccaas_builder
+      propagateEnvironment:
+        - HOME
+        - PATH
+        - LD_LIBRARY_PATH
+
+vm:
+  endpoint: unix:///var/run/docker.sock
+
+chaincode:
+  externalBuilders:
+    - name: ccaas_builder
+      path: /usr/local/bin/ccaas_builder
+
+bccsp:
+  default: SW
+  sw:
+    hash: SHA2
+    security: 256
+    filekeystore:
+      keystore: /etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/msp/keystore
