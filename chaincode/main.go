@@ -1,131 +1,139 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 
+	"github.com/hyperledger/fabric-chaincode-go/pkg/cid"
 	"github.com/hyperledger/fabric-chaincode-go/v2/shim"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 )
 
+type Degree struct {
+	ID          string `json:"id"`
+	StudentHash string `json:"student_hash"` 
+	Section     string `json:"section"`
+	Course      string `json:"course"`
+	Year        string `json:"year"`
+	IpfsCID     string `json:"ipfs_cid"` 
+	Amount      string `json:"amount"`
+	Type        string `json:"type"`
+	University  string `json:"university"`
+	Date        string `json:"date"`
+	Status      string `json:"status"`
+}
+
 type SmartContract struct{}
 
 func (cc *SmartContract) Init(stub shim.ChaincodeStubInterface) *pb.Response {
-	log.Println("Registrar chaincode Init called")
 	return shim.Success([]byte("OK"))
 }
 
 func (cc *SmartContract) Invoke(stub shim.ChaincodeStubInterface) *pb.Response {
 	function, args := stub.GetFunctionAndParameters()
-	log.Printf("Invoke: function=%s, args=%v\n", function, args)
-
 	switch function {
-	case "RecordGrade":
-		return recordGrade(stub, args)
-	case "ReadGrade":
-		return readGrade(stub, args)
-	case "GetHistory":
-		return getHistory(stub, args)
+	case "IssueDegree":
+		return cc.issueDegree(stub, args)
+	case "ReadDegree":
+		return cc.readDegree(stub, args)
+	case "GetAllDegrees":
+		return cc.getAllDegrees(stub)
 	default:
 		return shim.Error(fmt.Sprintf("Unknown function: %s", function))
 	}
 }
 
-func recordGrade(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
+func (cc *SmartContract) issueDegree(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
+	if err := cid.AssertAttributeValue(stub, "role", "faculty"); err != nil {
+		return shim.Error("Unauthorized: Only authorized faculty can issue records.")
+	}
+
 	if len(args) < 1 {
-		return shim.Error("recordGrade needs JSON argument")
+		return shim.Error("IssueDegree requires a JSON payload")
 	}
 
-	var record map[string]interface{}
-	if err := json.Unmarshal([]byte(args[0]), &record); err != nil {
-		return shim.Error(fmt.Sprintf("Invalid JSON: %v", err))
+	var degree Degree
+	if err := json.Unmarshal([]byte(args[0]), &degree); err != nil {
+		return shim.Error("Invalid JSON input")
 	}
 
-	recordID, ok := record["record_id"].(string)
-	if !ok || recordID == "" {
-		return shim.Error("Missing record_id")
-	}
-
-	// Check if exists
-	existing, err := stub.GetState(recordID)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("GetState error: %v", err))
-	}
+	existing, _ := stub.GetState(degree.ID)
 	if existing != nil {
-		return shim.Error(fmt.Sprintf("Record %s already exists", recordID))
+		return shim.Success([]byte(fmt.Sprintf(`{"status":"already_exists","id":"%s"}`, degree.ID)))
 	}
 
-	// Store
-	recordJSON, _ := json.Marshal(record)
-	if err := stub.PutState(recordID, recordJSON); err != nil {
-		return shim.Error(fmt.Sprintf("PutState error: %v", err))
+	degree.University = "PLV"
+	degree.Status = "Verified"
+
+	degreeJSON, _ := json.Marshal(degree)
+	if err := stub.PutState(degree.ID, degreeJSON); err != nil {
+		return shim.Error(err.Error())
 	}
 
-	// Emit event
-	stub.SetEvent("RecordCreated", recordJSON)
-
-	return shim.Success([]byte(fmt.Sprintf(`{"status":"success","recordID":"%s"}`, recordID)))
+	return shim.Success([]byte(fmt.Sprintf(`{"status":"success","id":"%s"}`, degree.ID)))
 }
 
-func readGrade(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
+func (cc *SmartContract) readDegree(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
 	if len(args) < 1 {
-		return shim.Error("readGrade needs recordID")
+		return shim.Error("readDegree requires ID")
 	}
 
-	recordID := args[0]
-	value, err := stub.GetState(recordID)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("GetState error: %v", err))
+	id := args[0]
+	degreeJSON, _ := stub.GetState(id)
+	if degreeJSON == nil {
+		return shim.Error("Degree record not found")
 	}
 
-	if value == nil {
-		return shim.Error(fmt.Sprintf("Record %s not found", recordID))
+	var degree Degree
+	json.Unmarshal(degreeJSON, &degree)
+
+	userRole, _, _ := cid.GetAttributeValue(stub, "role")
+	if userRole == "student" {
+		studentID, _, _ := cid.GetAttributeValue(stub, "studentID")
+		h := sha256.Sum256([]byte(studentID))
+		callerHash := hex.EncodeToString(h[:])
+
+		if degree.StudentHash != callerHash {
+			degree.IpfsCID = "REDACTED"
+			degree.Amount = "CONFIDENTIAL"
+			degreeJSON, _ = json.Marshal(degree)
+		}
 	}
 
-	return shim.Success(value)
+	return shim.Success(degreeJSON)
 }
 
-func getHistory(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
-	if len(args) < 1 {
-		return shim.Error("getHistory needs recordID")
-	}
-
-	recordID := args[0]
-	iter, err := stub.GetHistoryForKey(recordID)
+func (cc *SmartContract) getAllDegrees(stub shim.ChaincodeStubInterface) *pb.Response {
+	resultsIterator, err := stub.GetStateByRange("", "")
 	if err != nil {
-		return shim.Error(fmt.Sprintf("GetHistoryForKey error: %v", err))
+		return shim.Error(err.Error())
 	}
-	defer iter.Close()
+	defer resultsIterator.Close()
 
-	var history []interface{}
-	for iter.HasNext() {
-		kv, _ := iter.Next()
-		history = append(history, map[string]interface{}{
-			"TxId":      kv.TxId,
-			"Timestamp": kv.Timestamp,
-			"IsDelete":  kv.IsDelete,
-			"Value":     string(kv.Value),
-		})
+	var degrees []Degree
+	for resultsIterator.HasNext() {
+		queryResponse, _ := resultsIterator.Next()
+		var degree Degree
+		json.Unmarshal(queryResponse.Value, &degree)
+		degrees = append(degrees, degree)
 	}
 
-	result, _ := json.Marshal(history)
-	return shim.Success(result)
+	degreesJSON, _ := json.Marshal(degrees)
+	return shim.Success(degreesJSON)
 }
 
 func main() {
-	chaincode := &shim.ChaincodeServer{
+	server := &shim.ChaincodeServer{
 		CCID:    os.Getenv("CHAINCODE_ID"),
 		Address: os.Getenv("CHAINCODE_SERVER_ADDRESS"),
 		CC:      &SmartContract{},
 	}
-
-	log.Printf("Starting CCAAS Registrar Chaincode\n")
-	log.Printf("CHAINCODE_ID: %s\n", chaincode.CCID)
-	log.Printf("CHAINCODE_SERVER_ADDRESS: %s\n", chaincode.Address)
-
-	if err := chaincode.Start(); err != nil {
-		log.Fatalf("Chaincode start failed: %v\n", err)
+	log.Printf("Starting Degree CC as a Service\n")
+	if err := server.Start(); err != nil {
+		log.Fatalf("Error starting: %v", err)
 	}
 }
