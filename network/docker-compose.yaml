@@ -314,7 +314,6 @@ services:
         condition: service_healthy
       orderer.capstone.com:
         condition: service_started
-
   node6:
     image: couchdb:latest
     container_name: node6
@@ -328,7 +327,85 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+  # IPFS for Peer 0
+  ipfs0:
+    image: ipfs/Registrar:latest
+    container_name: ipfs0
+    environment:
+      - IPFS_PROFILE=server
+    ports:
+      - "5001:5001"   
+      - "8080:8080"   
+      - "4001:4001"   
+    volumes:
+      - ./ipfs/peer0:/data/ipfs
+    networks:
+      - registrar-net
 
+  # IPFS for Peer 1
+  ipfs1:
+    image: ipfs/Registrar:latest
+    container_name: ipfs1
+    ports:
+      - "5002:5001"
+      - "8081:8080"
+      - "4002:4001"
+    volumes:
+      - ./ipfs/peer1:/data/ipfs
+    networks:
+      - registrar-net
+
+  # IPFS for Peer 2
+  ipfs2:
+    image: ipfs/Registrar:latest
+    container_name: ipfs2
+    ports:
+      - "5003:5001"
+      - "8082:8080"
+      - "4003:4001"
+    volumes:
+      - ./ipfs/peer2:/data/ipfs
+    networks:
+      - registrar-net
+
+  # IPFS for Peer 3
+  ipfs3:
+    image: ipfs/Registrar:latest
+    container_name: ipfs3
+    ports:
+      - "5004:5001"
+      - "8083:8080"
+      - "4004:4001"
+    volumes:
+      - ./ipfs/peer3:/data/ipfs
+    networks:
+      - registrar-net
+
+  # IPFS for Peer 4
+  ipfs4:
+    image: ipfs/Registrar:latest
+    container_name: ipfs4
+    ports:
+      - "5005:5001"
+      - "8084:8080"
+      - "4005:4001"
+    volumes:
+      - ./ipfs/peer4:/data/ipfs
+    networks:
+      - registrar-net
+
+  # IPFS for Peer 5
+  ipfs5:
+    image: ipfs/Registrar:latest
+    container_name: ipfs5
+    ports:
+      - "5006:5001"
+      - "8085:8080"
+      - "4006:4001"
+    volumes:
+      - ./ipfs/peer5:/data/ipfs
+    networks:
+      - registrar-net
   fabric-tools:
     image: hyperledger/fabric-tools:latest
     container_name: fabric-tools
