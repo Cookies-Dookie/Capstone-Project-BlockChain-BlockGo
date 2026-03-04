@@ -1,3 +1,25 @@
-# Environment variables
+node_modules/
+**/node_modules/
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.user
+*.suo
 .env
 .fake
+__pycache__/
+*.pyc
+network/crypto-config/
+network/fabric-ca/registrar/fabric-ca-server.db
+client-app/bin/
+client-app/obj/
+client-app/obj/Debug/
+*.cache
+*.cache.json
+network/postgres-data/
+network/ipfs/
+network/bin/
+network/*.block
+network/*.tar.gz

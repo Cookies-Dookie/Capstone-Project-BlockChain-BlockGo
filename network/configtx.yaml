@@ -1,137 +1,146 @@
 ﻿Organizations:
-    - &OrdererOrg
-        Name: OrdererOrg
-        ID: OrdererMSP
-        MSPDir: crypto-config/ordererOrganizations/capstone.com/msp
-        Policies:
-            Readers:
-                Type: Signature
-                Rule: "OR('OrdererMSP.member')"
-            Writers:
-                Type: Signature
-                Rule: "OR('OrdererMSP.member')"
-            Admins:
-                Type: Signature
-                Rule: "OR('OrdererMSP.admin')"
-        OrdererEndpoints:
-            - orderer.capstone.com:7050
+  - &OrdererOrg
+    Name: OrdererMSP
+    ID: OrdererMSP
+    MSPDir: crypto-config/ordererOrganizations/capstone.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.admin')"
+    OrdererEndpoints:
+      - orderer.capstone.com:7050
 
-    - &Org1
-        Name: RegistrarMSP
-        ID: RegistrarMSP
-        MSPDir: crypto-config/peerOrganizations/registrar.capstone.com/msp
-        Policies:
-            Readers:
-                Type: Signature
-                Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.peer', 'RegistrarMSP.client')"
-            Writers:
-                Type: Signature
-                Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.client')"
-            Admins:
-                Type: Signature
-                Rule: "OR('RegistrarMSP.admin')"
-            Endorsement:
-                Type: Signature
-                Rule: "OR('RegistrarMSP.peer')"
-        AnchorPeers:
-            - Host: peer0.registrar.capstone.com
-              Port: 7051
+  - &RegistrarOrg
+    Name: RegistrarMSP
+    ID: RegistrarMSP
+    MSPDir: crypto-config/peerOrganizations/registrar.capstone.com/msp
+    MSPConfigHandler:
+      Attributes:
+        NodeOUs:
+          Enable: true
+          ClientOUIdentifier:
+            Certificate: crypto-config/peerOrganizations/registrar.capstone.com/msp/cacerts/localhost-7054-ca-registrar-capstone-com.pem 
+            OrganizationalUnitIdentifier: client
+          AdminOUIdentifier:
+            Certificate: crypto-config/peerOrganizations/registrar.capstone.com/msp/cacerts/localhost-7054-ca-registrar-capstone-com.pem
+            OrganizationalUnitIdentifier: admin
+          PeerOUIdentifier:
+            Certificate: crypto-config/peerOrganizations/registrar.capstone.com/msp/cacerts/localhost-7054-ca-registrar-capstone-com.pem
+            OrganizationalUnitIdentifier: peer
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.peer', 'RegistrarMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('RegistrarMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('RegistrarMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.registrar.capstone.com
+        Port: 7051
 
 Capabilities:
-    Channel: &ChannelCapabilities
-        V2_0: true
-    Orderer: &OrdererCapabilities
-        V2_0: true
-    Application: &ApplicationCapabilities
-        V2_0: true
-
-Application: &ApplicationDefaults
-    Organizations:
-    Policies:
-        Readers:
-            Type: ImplicitMeta
-            Rule: "ANY Readers"
-        Writers:
-            Type: ImplicitMeta
-            Rule: "ANY Writers"
-        Admins:
-            Type: ImplicitMeta
-            Rule: "MAJORITY Admins"
-        LifecycleEndorsement:
-            Type: ImplicitMeta
-            Rule: "MAJORITY Endorsement"
-        Endorsement:
-            Type: ImplicitMeta
-            Rule: "MAJORITY Endorsement"
-    Capabilities:
-        <<: *ApplicationCapabilities
-
-Orderer: &OrdererDefaults
-    OrdererType: etcdraft
-    Addresses:
-        - orderer.capstone.com:7050
-    EtcdRaft:
-        Consenters:
-        - Host: orderer.capstone.com
-          Port: 7050
-          ClientTLSCert: crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/server.crt
-          ServerTLSCert: crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/server.crt
-    BatchTimeout: 2s
-    BatchSize:
-        MaxMessageCount: 10
-        AbsoluteMaxBytes: 99 MB
-        PreferredMaxBytes: 512 KB
-    Organizations:
-    Policies:
-        Readers:
-            Type: ImplicitMeta
-            Rule: "ANY Readers"
-        Writers:
-            Type: ImplicitMeta
-            Rule: "ANY Writers"
-        Admins:
-            Type: ImplicitMeta
-            Rule: "MAJORITY Admins"
-        BlockValidation:
-            Type: ImplicitMeta
-            Rule: "ANY Writers"
-    Capabilities:
-        <<: *OrdererCapabilities
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_0: true
 
 Channel: &ChannelDefaults
-    Policies:
-        Readers:
-            Type: ImplicitMeta
-            Rule: "ANY Readers"
-        Writers:
-            Type: ImplicitMeta
-            Rule: "ANY Writers"
-        Admins:
-            Type: ImplicitMeta
-            Rule: "MAJORITY Admins"
-    Capabilities:
-        <<: *ChannelCapabilities
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+Application: &ApplicationDefaults
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  EtcdRaft:
+    Consenters:
+      - Host: orderer.capstone.com
+        Port: 7050
+        ClientTLSCert: crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/server.crt
+        ServerTLSCert: crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/server.crt
+  Addresses:
+    - orderer.capstone.com:7050
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
 
 Profiles:
-    OneOrgOrdererGenesis:
-        <<: *ChannelDefaults
-        Orderer:
-            <<: *OrdererDefaults
-            Organizations:
-                - *OrdererOrg
-            Capabilities:
-                <<: *OrdererCapabilities
-        Consortiums:
-            SampleConsortium:
-                Organizations:
-                    - *Org1
+  Genesis:
+    <<: *ChannelDefaults 
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+    Consortiums:
+      SampleConsortium:
+        Organizations:
+          - *RegistrarOrg
 
-    OneOrgChannel:
-        <<: *ChannelDefaults
-        Consortium: SampleConsortium
-        Application:
-            <<: *ApplicationDefaults
-            Organizations:
-                - *Org1
-            Capabilities:
-                <<: *ApplicationCapabilities
+  RegistrarChannel:
+    Consortium: SampleConsortium
+    <<: *ChannelDefaults
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *RegistrarOrg
+      Capabilities:
+        <<: *ApplicationCapabilities

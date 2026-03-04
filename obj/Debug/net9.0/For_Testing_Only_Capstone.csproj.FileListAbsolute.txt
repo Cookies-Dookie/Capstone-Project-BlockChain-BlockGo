@@ -1,9 +1,0 @@
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.csproj.AssemblyReference.cache
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\rpswa.dswa.cache.json
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.GeneratedMSBuildEditorConfig.editorconfig
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.AssemblyInfoInputs.cache
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.AssemblyInfo.cs
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.csproj.CoreCompileInputs.cache
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.MvcApplicationPartsAssemblyInfo.cs
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.MvcApplicationPartsAssemblyInfo.cache
-C:\Users\Carmela\Documents\GitHub\Capstone-Project-\For_Testing_Only_Capstone\obj\Debug\net9.0\For_Testing_Only_Capstone.sourcelink.json

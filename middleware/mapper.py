@@ -5,7 +5,8 @@ import requests
 import ipfshttpclient 
 
 class DegreeMapper:
-    def __init__(self, ipfs_api_url='/dns/ipfs0/tcp/5001/http'):
+    # Default to localhost for running on host machine. Use /dns/ipfs0... if running inside docker network
+    def __init__(self, ipfs_api_url='/ip4/127.0.0.1/tcp/5001/http'):
         self.ipfs_url = ipfs_api_url
         self.university = "PLV"
 
@@ -37,10 +38,11 @@ class DegreeMapper:
                 "student_hash": self.hash_student_id(str(row['student_id'])),
                 "section": row['section'],
                 "course": row['course'],
-                "year": str(row['year']),
+                "subject_code": row['subject_code'],
+                "grade": str(row['grade']),
+                "semester": row['semester'],
+                "school_year": str(row['school_year']),
                 "ipfs_cid": section_cid,
-                "amount": "0.00",
-                "type": "GRADE_RECORD",
                 "university": self.university,
                 "date": row['date'],
                 "status": "Verified"

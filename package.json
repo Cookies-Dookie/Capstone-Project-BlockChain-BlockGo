@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "express": "^5.2.1",
+    "fabric-ca-client": "^2.2.20",
     "fabric-network": "^2.2.20",
     "for_testing_only_capstone": "file:",
     "ipfs-http-client": "^60.0.1",
