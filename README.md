@@ -1,6 +1,6 @@
 Project Status: Hyperledger Fabric CCaaS Implementation
 
-This document tracks the technical progress and remaining tasks for the Registrar Smart Contract deployment using the Chaincode-as-a-Service (CCaaS) architecture.
+This document tracks the technical progress and remaining tasks for the BLOCKGO BACKEND AND MIDDLEWARE deployment using the Chaincode-as-a-Service (CCaaS) architecture.
 Technical Progress Summary
 Phase 1: Chaincode Lifecycle and Package Management
 
