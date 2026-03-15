@@ -1,18 +1,22 @@
 ﻿using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration; 
 
 namespace For_Testing_Only_Capstone.Models;
 
 public partial class RegistrarDbContext : DbContext
 {
+    private readonly IConfiguration? _configuration;
+
     public RegistrarDbContext()
     {
     }
 
-    public RegistrarDbContext(DbContextOptions<RegistrarDbContext> options)
+    public RegistrarDbContext(DbContextOptions<RegistrarDbContext> options, IConfiguration configuration)
         : base(options)
     {
+        _configuration = configuration;
     }
 
     public virtual DbSet<Gradecorrectionlog> Gradecorrectionlogs { get; set; }
@@ -23,7 +27,14 @@ public partial class RegistrarDbContext : DbContext
     {
         if (!optionsBuilder.IsConfigured)
         {
-            optionsBuilder.UseNpgsql("Host=127.0.0.1;Database=AcitivityLogs;Username=BLOCKGO;Password=PLVBLOCKGO");
+            string? connectionString = _configuration?.GetConnectionString("PostgresConnection");
+            
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                connectionString = "Host=127.0.0.1;Database=AcitivityLogs;Username=BLOCKGO;Password=PLVBLOCKGO";
+            }
+
+            optionsBuilder.UseNpgsql(connectionString);
         }
     }
 
@@ -64,6 +75,11 @@ public partial class RegistrarDbContext : DbContext
             entity.HasIndex(e => e.Email, "userrequests_email_key").IsUnique();
 
             entity.Property(e => e.Requestid).HasColumnName("requestid");
+            
+            entity.Property(e => e.Department)
+                .HasMaxLength(50)
+                .HasColumnName("department");
+
             entity.Property(e => e.Createdat)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
                 .HasColumnType("timestamp without time zone")

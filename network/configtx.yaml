@@ -1,18 +1,12 @@
-﻿Organizations:
+Organizations:
   - &OrdererOrg
     Name: OrdererMSP
     ID: OrdererMSP
     MSPDir: crypto-config/ordererOrganizations/capstone.com/msp
     Policies:
-      Readers:
-        Type: Signature
-        Rule: "OR('OrdererMSP.member')"
-      Writers:
-        Type: Signature
-        Rule: "OR('OrdererMSP.member')"
-      Admins:
-        Type: Signature
-        Rule: "OR('OrdererMSP.admin')"
+      Readers: { Type: Signature, Rule: "OR('OrdererMSP.member')" }
+      Writers: { Type: Signature, Rule: "OR('OrdererMSP.member')" }
+      Admins: { Type: Signature, Rule: "OR('OrdererMSP.admin')" }
     OrdererEndpoints:
       - orderer.capstone.com:7050
 
@@ -20,35 +14,40 @@
     Name: RegistrarMSP
     ID: RegistrarMSP
     MSPDir: crypto-config/peerOrganizations/registrar.capstone.com/msp
-    MSPConfigHandler:
-      Attributes:
-        NodeOUs:
-          Enable: true
-          ClientOUIdentifier:
-            Certificate: crypto-config/peerOrganizations/registrar.capstone.com/msp/cacerts/localhost-7054-ca-registrar-capstone-com.pem 
-            OrganizationalUnitIdentifier: client
-          AdminOUIdentifier:
-            Certificate: crypto-config/peerOrganizations/registrar.capstone.com/msp/cacerts/localhost-7054-ca-registrar-capstone-com.pem
-            OrganizationalUnitIdentifier: admin
-          PeerOUIdentifier:
-            Certificate: crypto-config/peerOrganizations/registrar.capstone.com/msp/cacerts/localhost-7054-ca-registrar-capstone-com.pem
-            OrganizationalUnitIdentifier: peer
     Policies:
-      Readers:
-        Type: Signature
-        Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.peer', 'RegistrarMSP.client')"
-      Writers:
-        Type: Signature
-        Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.client')"
-      Admins:
-        Type: Signature
-        Rule: "OR('RegistrarMSP.admin')"
-      Endorsement:
-        Type: Signature
-        Rule: "OR('RegistrarMSP.peer')"
+      Readers: { Type: Signature, Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.peer', 'RegistrarMSP.client')" }
+      Writers: { Type: Signature, Rule: "OR('RegistrarMSP.admin', 'RegistrarMSP.client')" }
+      Admins: { Type: Signature, Rule: "OR('RegistrarMSP.admin')" }
+      Endorsement: { Type: Signature, Rule: "OR('RegistrarMSP.peer')" }
     AnchorPeers:
       - Host: peer0.registrar.capstone.com
         Port: 7051
+
+  - &FacultyOrg
+    Name: FacultyMSP
+    ID: FacultyMSP
+    MSPDir: crypto-config/peerOrganizations/faculty.capstone.com/msp
+    Policies:
+      Readers: { Type: Signature, Rule: "OR('FacultyMSP.admin', 'FacultyMSP.peer', 'FacultyMSP.client')" }
+      Writers: { Type: Signature, Rule: "OR('FacultyMSP.admin', 'FacultyMSP.client')" }
+      Admins: { Type: Signature, Rule: "OR('FacultyMSP.admin')" }
+      Endorsement: { Type: Signature, Rule: "OR('FacultyMSP.peer')" }
+    AnchorPeers:
+      - Host: peer0.faculty.capstone.com
+        Port: 9051
+
+  - &DepartmentOrg
+    Name: DepartmentMSP
+    ID: DepartmentMSP
+    MSPDir: crypto-config/peerOrganizations/department.capstone.com/msp
+    Policies:
+      Readers: { Type: Signature, Rule: "OR('DepartmentMSP.admin', 'DepartmentMSP.peer', 'DepartmentMSP.client')" }
+      Writers: { Type: Signature, Rule: "OR('DepartmentMSP.admin', 'DepartmentMSP.client')" }
+      Admins: { Type: Signature, Rule: "OR('DepartmentMSP.admin')" }
+      Endorsement: { Type: Signature, Rule: "OR('DepartmentMSP.peer')" }
+    AnchorPeers:
+      - Host: peer0.department.capstone.com
+        Port: 11051
 
 Capabilities:
   Channel: &ChannelCapabilities
@@ -60,36 +59,22 @@ Capabilities:
 
 Channel: &ChannelDefaults
   Policies:
-    Readers:
-      Type: ImplicitMeta
-      Rule: "ANY Readers"
-    Writers:
-      Type: ImplicitMeta
-      Rule: "ANY Writers"
-    Admins:
-      Type: ImplicitMeta
-      Rule: "MAJORITY Admins"
+    Readers: { Type: ImplicitMeta, Rule: "ANY Readers" }
+    Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
+    Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
   Capabilities:
     <<: *ChannelCapabilities
 
 Application: &ApplicationDefaults
   Organizations:
   Policies:
-    Readers:
-      Type: ImplicitMeta
-      Rule: "ANY Readers"
-    Writers:
-      Type: ImplicitMeta
-      Rule: "ANY Writers"
-    Admins:
-      Type: ImplicitMeta
-      Rule: "MAJORITY Admins"
-    LifecycleEndorsement:
-      Type: ImplicitMeta
-      Rule: "MAJORITY Endorsement"
-    Endorsement:
-      Type: ImplicitMeta
-      Rule: "MAJORITY Endorsement"
+    Readers: { Type: ImplicitMeta, Rule: "ANY Readers" }
+    Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
+    Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
+    LifecycleEndorsement: { Type: ImplicitMeta, Rule: "MAJORITY Endorsement" }
+    Endorsement: { Type: ImplicitMeta, Rule: "MAJORITY Endorsement" }
+  Capabilities:
+    <<: *ApplicationCapabilities
 
 Orderer: &OrdererDefaults
   OrdererType: etcdraft
@@ -108,22 +93,14 @@ Orderer: &OrdererDefaults
     PreferredMaxBytes: 512 KB
   Organizations:
   Policies:
-    Readers:
-      Type: ImplicitMeta
-      Rule: "ANY Readers"
-    Writers:
-      Type: ImplicitMeta
-      Rule: "ANY Writers"
-    Admins:
-      Type: ImplicitMeta
-      Rule: "MAJORITY Admins"
-    BlockValidation:
-      Type: ImplicitMeta
-      Rule: "ANY Writers"
+    Readers: { Type: ImplicitMeta, Rule: "ANY Readers" }
+    Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
+    Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
+    BlockValidation: { Type: ImplicitMeta, Rule: "ANY Writers" }
 
 Profiles:
-  Genesis:
-    <<: *ChannelDefaults 
+  UniversityGenesis:
+    <<: *ChannelDefaults
     Orderer:
       <<: *OrdererDefaults
       Organizations:
@@ -131,16 +108,20 @@ Profiles:
       Capabilities:
         <<: *OrdererCapabilities
     Consortiums:
-      SampleConsortium:
+      UniversityConsortium:
         Organizations:
           - *RegistrarOrg
+          - *FacultyOrg
+          - *DepartmentOrg
 
   RegistrarChannel:
-    Consortium: SampleConsortium
+    Consortium: UniversityConsortium
     <<: *ChannelDefaults
     Application:
       <<: *ApplicationDefaults
       Organizations:
         - *RegistrarOrg
+        - *FacultyOrg
+        - *DepartmentOrg
       Capabilities:
         <<: *ApplicationCapabilities

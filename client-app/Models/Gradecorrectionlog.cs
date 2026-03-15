@@ -7,15 +7,15 @@ public partial class Gradecorrectionlog
 {
     public int Logid { get; set; }
 
-    public string Recordid { get; set; } = null!;
+    public string Recordid { get; set; } = string.Empty;
 
     public string? Oldgrade { get; set; }
 
     public string? Newgrade { get; set; }
 
-    public string Reasontext { get; set; } = null!;
+    public string Reasontext { get; set; } = string.Empty;
 
     public string? Approvedby { get; set; }
 
-    public DateTime? Timestamp { get; set; }
+    public DateTime? Timestamp { get; set; } = DateTime.UtcNow;
 }

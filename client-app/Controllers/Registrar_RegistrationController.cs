@@ -2,13 +2,11 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Net.Http;
-using System.Text;
-using System.Text.Json;
+using System.Net.Http.Json;
 using System.Threading.Tasks;
-using Client_app.Services;
-using System.Linq;
-using Client_app.Models;
 using For_Testing_Only_Capstone.Models;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Client_app.Controllers
 {
@@ -18,27 +16,18 @@ namespace Client_app.Controllers
     {
         private readonly RegistrarDbContext _context;
         private readonly IHttpClientFactory _httpClientFactory;
-        private readonly IFabricCaAuthService _fabricCaAuthService;
-        private readonly IConfiguration _configuration; 
+        private readonly IConfiguration _configuration;
+        private readonly ILogger<Registrar_RegistrationController> _logger;
 
-        public Registrar_RegistrationController(
-            RegistrarDbContext context,
-            IHttpClientFactory httpClientFactory,
-            IFabricCaAuthService fabricCaAuthService,
-            IConfiguration configuration)
+        public Registrar_RegistrationController(RegistrarDbContext context, IHttpClientFactory httpClientFactory, IConfiguration configuration, ILogger<Registrar_RegistrationController> logger)
         {
             _context = context;
             _httpClientFactory = httpClientFactory;
-            _fabricCaAuthService = fabricCaAuthService;
             _configuration = configuration;
+            _logger = logger;
         }
 
-        public class RegistrationRequest
-        {
-            public string Username { get; set; }
-            public string Password { get; set; }
-            public string Role { get; set; }
-        }
+        public class RegistrationRequest { public string Password { get; set; } = string.Empty; }
 
         [HttpPost("grant/{sqlRequestId}")]
         public async Task<IActionResult> GrantAccess(int sqlRequestId, [FromBody] RegistrationRequest request)
@@ -46,56 +35,38 @@ namespace Client_app.Controllers
             try
             {
                 var sqlRecord = await _context.Userrequests.FindAsync(sqlRequestId);
-                if (sqlRecord == null) return NotFound(new { status = "Error", message = "Request ID not found." });
+                if (sqlRecord == null || sqlRecord.Requeststatus != "PENDING")
+                    return BadRequest(new { status = "Error", message = "Invalid request" });
 
-                if (sqlRecord.Requeststatus != "PENDING")
-                {
-                    return BadRequest(new { status = "Error", message = $"Request is already in '{sqlRecord.Requeststatus}' state." });
-                }
-
-                string fabricRole;
-                switch (request.Role.ToLower())
-                {
-                    case "prof":
-                        fabricRole = "faculty";
-                        break;
-                    case "registrar":
-                        fabricRole = "registrar";
-                        break;
-                    default:
-                        fabricRole = "student";
-                        break;
-                }
-                var attributes = new[] { new { name = "role", value = fabricRole, ecert = true } };
-
-                var payloadObj = new { id = request.Username, secret = request.Password, type = "client", affiliation = "org1.department1", attrs = attributes };
-                string jsonBody = JsonSerializer.Serialize(payloadObj);
+                var middlewareUrl = _configuration["Middleware:Url"] ?? "http://localhost:4000";
+                using var client = _httpClientFactory.CreateClient("FabricCAClient");
                 
-                string authToken = _fabricCaAuthService.GenerateAuthToken("POST", "/api/v1/register", jsonBody);
-
-                var caBaseUrl = _configuration["FabricCA:Url"];
-                using var httpClient = _httpClientFactory.CreateClient("FabricCAClient"); 
-                var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{caBaseUrl}/api/v1/register")
+                string mappedRole = "student";
+                if (sqlRecord.Role != null)
                 {
-                    Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
-                };
-                requestMessage.Headers.TryAddWithoutValidation("Authorization", authToken);
-
-                var response = await httpClient.SendAsync(requestMessage);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    sqlRecord.Requeststatus = "APPROVED";
-                    await _context.SaveChangesAsync();
-                    return Ok(new { status = "Success", message = $"Account {request.Username} secured on Blockchain." });
+                    var r = sqlRecord.Role.ToLower();
+                    if (r == "prof" || r == "faculty") mappedRole = "faculty";
+                    else if (r == "dean" || r == "department" || r == "department_admin" || r == "dept") mappedRole = "department_admin";
+                    else if (r == "registrar") mappedRole = "registrar";
                 }
 
-                return StatusCode((int)response.StatusCode, new { status = "Error", message = await response.Content.ReadAsStringAsync() });
+                var payload = new { 
+                    username = sqlRecord.Email, 
+                    password = request.Password, 
+                    role = mappedRole 
+                };
+
+                var regRes = await client.PostAsJsonAsync($"{middlewareUrl}/api/register", payload);
+                if (!regRes.IsSuccessStatusCode) return StatusCode((int)regRes.StatusCode, await regRes.Content.ReadAsStringAsync());
+
+                var enrollRes = await client.PostAsJsonAsync($"{middlewareUrl}/api/enroll", payload);
+                if (!enrollRes.IsSuccessStatusCode) return BadRequest("Wallet creation failed.");
+
+                sqlRecord.Requeststatus = "APPROVED";
+                await _context.SaveChangesAsync();
+                return Ok(new { status = "Success", message = "Blockchain ID and Wallet Synchronized" });
             }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { status = "Error", message = ex.Message });
-            }
+            catch (Exception ex) { return StatusCode(500, new { status = "Error", message = ex.Message }); }
         }
     }
 }

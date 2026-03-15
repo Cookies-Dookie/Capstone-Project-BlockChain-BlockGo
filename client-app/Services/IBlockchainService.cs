@@ -5,9 +5,11 @@ namespace BlockGo.Services
 {
     public interface IBlockchainService
     {
-        Task<string> SubmitGradeAsync(GradeRequest request);
-        Task<string> UpdateGradeAsync(AcademicRecord record);
-        Task<string> GetGradeAsync(string recordId);
-        Task<string> GetAllGradesAsync();
+        Task<string> SubmitGradeAsync(AcademicRecord record, string invokerUsername); 
+        Task<string> UpdateGradeAsync(AcademicRecord record, string invokerUsername);
+        Task<string> GetGradeAsync(string recordId, string invokerUsername);
+        Task<string> GetAllGradesAsync(string invokerUsername);
+        Task<string> ApproveGradeAsync(string recordId, string invokerUsername);
+        Task<string> FinalizeGradeAsync(string recordId, string invokerUsername);
     }
 }

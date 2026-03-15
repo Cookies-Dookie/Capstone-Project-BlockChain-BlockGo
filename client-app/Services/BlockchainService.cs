@@ -2,43 +2,145 @@ using BlockGo.Models;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace BlockGo.Services
 {
     public class BlockchainService : IBlockchainService
     {
         private readonly HttpClient _httpClient;
+        private readonly ILogger<BlockchainService> _logger;
+        private const string MiddlewareBaseUrl = "http://localhost:4000";
 
-        public BlockchainService(HttpClient httpClient)
+        public BlockchainService(HttpClient httpClient, ILogger<BlockchainService>? logger = null)
         {
             _httpClient = httpClient;
+            _logger = logger;
         }
 
-        public async Task<string> GetAllGradesAsync()
+        public async Task<string> GetAllGradesAsync(string invokerUsername)
         {
-            var response = await _httpClient.GetAsync("http://localhost:4000/api/all-grades");
-            response.EnsureSuccessStatusCode();
+            _logger?.LogInformation("Getting all grades from blockchain as {User}", invokerUsername);
+            
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{MiddlewareBaseUrl}/api/all-grades");
+            request.Headers.Add("x-user-identity", invokerUsername); 
+
+            var response = await _httpClient.SendAsync(request);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger?.LogError("Middleware GetAllGrades Error: {Error}", errorContent);
+                throw new Exception($"Middleware Error: {errorContent}");
+            }
+            
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<string> GetGradeAsync(string recordId)
+        public async Task<string> GetGradeAsync(string recordId, string invokerUsername)
         {
-            var response = await _httpClient.GetAsync($"http://localhost:4000/api/get-grade/{recordId}");
-            response.EnsureSuccessStatusCode();
+            _logger?.LogInformation("Getting grade for record ID: {RecordId} as {User}", recordId, invokerUsername);
+            
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{MiddlewareBaseUrl}/api/get-grade/{recordId}");
+            request.Headers.Add("x-user-identity", invokerUsername);
+
+            var response = await _httpClient.SendAsync(request);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger?.LogError("Middleware Approve Error: {Error}", errorContent);
+                throw new Exception($"Middleware Error: {errorContent}");
+            }
+            
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<string> SubmitGradeAsync(GradeRequest request)
+        public async Task<string> SubmitGradeAsync(AcademicRecord record, string invokerUsername)
         {
-            var response = await _httpClient.PostAsJsonAsync("http://localhost:4000/api/issue-grade", request);
-            response.EnsureSuccessStatusCode();
+            _logger?.LogInformation("Submitting grade for student: {StudentId} as {User}", record.Id, invokerUsername);
+            
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{MiddlewareBaseUrl}/api/issue-grade")
+            {
+                Content = JsonContent.Create(record)
+            };
+            request.Headers.Add("x-user-identity", invokerUsername);
+            
+            var response = await _httpClient.SendAsync(request);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger?.LogError("Middleware Error: {Error}", errorContent);
+                response.EnsureSuccessStatusCode();
+            }
+            
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<string> UpdateGradeAsync(AcademicRecord record)
+        public async Task<string> UpdateGradeAsync(AcademicRecord record, string invokerUsername)
         {
-            var response = await _httpClient.PostAsJsonAsync("http://localhost:4000/api/update-grade", record);
-            response.EnsureSuccessStatusCode();
+            _logger?.LogInformation("Updating grade for student: {StudentId} as {User}", record.Id, invokerUsername);
+            
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{MiddlewareBaseUrl}/api/update-grade")
+            {
+                Content = JsonContent.Create(record)
+            };
+            request.Headers.Add("x-user-identity", invokerUsername);
+            
+            var response = await _httpClient.SendAsync(request);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger?.LogError("Middleware UpdateGrade Error: {Error}", errorContent);
+                throw new Exception($"Middleware Error: {errorContent}");
+            }
+            
+            return await response.Content.ReadAsStringAsync();
+        }
+
+        public async Task<string> ApproveGradeAsync(string recordId, string invokerUsername)
+        {
+            _logger?.LogInformation("Approving grade for record: {RecordId} as {User}", recordId, invokerUsername);
+            
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{MiddlewareBaseUrl}/api/approve-grade/{recordId}")
+            {
+                Content = JsonContent.Create(new { })
+            };
+            request.Headers.Add("x-user-identity", invokerUsername);
+
+            var response = await _httpClient.SendAsync(request);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger?.LogError("Middleware Approve Error: {Error}", errorContent);
+                throw new Exception($"Middleware Error: {errorContent}");
+            }
+            
+            return await response.Content.ReadAsStringAsync();
+        }
+
+        public async Task<string> FinalizeGradeAsync(string recordId, string invokerUsername)
+        {
+            _logger?.LogInformation("Finalizing grade for record: {RecordId} as {User}", recordId, invokerUsername);
+            
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{MiddlewareBaseUrl}/api/finalize-grade/{recordId}")
+            {
+                Content = JsonContent.Create(new { })
+            };
+            request.Headers.Add("x-user-identity", invokerUsername);
+
+            var response = await _httpClient.SendAsync(request);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger?.LogError("Middleware Finalize Error: {Error}", errorContent);
+                throw new Exception($"Middleware Error: {errorContent}");
+            }
+            
             return await response.Content.ReadAsStringAsync();
         }
     }

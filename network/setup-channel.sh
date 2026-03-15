@@ -58,7 +58,8 @@ NodeOUs:
     OrganizationalUnitIdentifier: orderer
 EOF
       echo "Updated $PEER_MSP/config.yaml (using CA: $PEER_CA_CERT)"
-   fi
+      fi
+   done
 done
 
 cd /opt/fabric-config/channel-artifacts

@@ -12,16 +12,16 @@ import (
 )
 
 type AcademicRecord struct {
-	ID          string `json:"id"`           
+	ID          string `json:"id"`
 	StudentHash string `json:"student_hash"`
 	Section     string `json:"section"`
-	Course      string `json:"course"`       
-	SubjectCode string `json:"subject_code"` 
+	Course      string `json:"course"`
+	SubjectCode string `json:"subject_code"`
 	Grade       string `json:"grade"`
-	Semester    string `json:"semester"`   
-	SchoolYear  string `json:"school_year"`  
-	FacultyID   string `json:"faculty_id"`  
-	Date        string `json:"date"`      
+	Semester    string `json:"semester"`
+	SchoolYear  string `json:"school_year"`
+	FacultyID   string `json:"faculty_id"`
+	Date        string `json:"date"`
 	IpfsCID     string `json:"ipfs_cid"`
 	University  string `json:"university"`
 	Status      string `json:"status"`
@@ -30,191 +30,256 @@ type AcademicRecord struct {
 
 type SmartContract struct{}
 
+func getSafeAttribute(stub shim.ChaincodeStubInterface, attrName string) (string, bool) {
+	val, found, err := cid.GetAttributeValue(stub, attrName)
+	if err != nil || !found {
+		return "", false
+	}
+	return val, true
+}
+
 func (cc *SmartContract) Init(stub shim.ChaincodeStubInterface) *pb.Response {
 	return shim.Success([]byte("OK"))
 }
 
 func (cc *SmartContract) Invoke(stub shim.ChaincodeStubInterface) *pb.Response {
 	function, args := stub.GetFunctionAndParameters()
+
 	switch function {
 	case "IssueGrade":
 		return cc.issueGrade(stub, args)
 	case "ReadGrade":
 		return cc.readGrade(stub, args)
-	case "GetAllGrades":
-		return cc.getAllGrades(stub)
 	case "UpdateGrade":
 		return cc.updateGrade(stub, args)
+	case "ApproveGrade":
+		return cc.approveGrade(stub, args)
+	case "FinalizeRecord":
+		return cc.finalizeRecord(stub, args)
+	case "GetAllGrades":
+		return cc.getAllGrades(stub)
 	default:
-		return shim.Error(fmt.Sprintf("Unknown function: %s", function))
+		return shim.Error("Invalid function name")
 	}
 }
 
 func (cc *SmartContract) issueGrade(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
 	if len(args) < 1 {
-		return shim.Error("Record data is required")
-	}
-	if err := cid.AssertAttributeValue(stub, "role", "faculty"); err != nil {
-		return shim.Error(fmt.Sprintf("Role check failed: The user does not have the 'faculty' role required to issue grades. Error: %v", err))
+		return shim.Error("Record data required")
 	}
 
-	var newRecord AcademicRecord
-	if err := json.Unmarshal([]byte(args[0]), &newRecord); err != nil {
-		return shim.Error(fmt.Sprintf("Invalid JSON input: %v", err))
+	// -----------------------------------------------------------------
+	// GATE 1: OBAC (Must belong to Faculty Organization)
+	// -----------------------------------------------------------------
+	mspID, _ := cid.GetMSPID(stub)
+	if mspID != "FacultyMSP" {
+		return shim.Error(fmt.Sprintf("OBAC Denied: Must belong to FacultyMSP. Your MSP is %s", mspID))
 	}
 
-	existingJSON, err := stub.GetState(newRecord.ID)
+	// -----------------------------------------------------------------
+	// GATE 2: ABAC (Must have the cryptographic 'faculty' role)
+	// -----------------------------------------------------------------
+	role, found := getSafeAttribute(stub, "role")
+	if !found || role != "faculty" {
+		return shim.Error("ABAC Denied: User belongs to FacultyMSP, but lacks the cryptographic 'faculty' role.")
+	}
+
+	var record AcademicRecord
+	err := json.Unmarshal([]byte(args[0]), &record)
 	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to read from world state: %v", err))
-	}
-	if existingJSON != nil {
-		return shim.Error("Conflict: Record already exists.")
+		return shim.Error("Invalid JSON input")
 	}
 
-	submitterID, err := cid.GetID(stub)
+	dept, deptFound := getSafeAttribute(stub, "dept")
+	if deptFound && record.University != dept {
+		return shim.Error("ABAC Denied: Faculty cannot issue grades for a different department")
+	}
+
+	existing, _ := stub.GetPrivateData("collectionGrades", record.ID)
+	if existing != nil {
+		return shim.Error("Record already exists")
+	}
+
+	submitterID, _ := cid.GetID(stub)
+	record.FacultyID = submitterID
+	record.Status = "Issued"
+	record.Version = 1
+
+	recordJSON, _ := json.Marshal(record)
+	err = stub.PutPrivateData("collectionGrades", record.ID, recordJSON)
 	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to get submitter ID: %v", err))
-	}
-	newRecord.FacultyID = submitterID 
-	newRecord.Version = 1
-	newRecord.University = "PLV"
-	newRecord.Status = "Verified"
-
-	recordJSON, err := json.Marshal(newRecord)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to marshal record: %v", err))
-	}
-	if err := stub.PutState(newRecord.ID, recordJSON); err != nil {
-		return shim.Error(fmt.Sprintf("Failed to write to world state: %v", err))
+		return shim.Error("Failed to write private data")
 	}
 
-	return shim.Success([]byte(fmt.Sprintf(`{"status":"success","id":"%s"}`, newRecord.ID)))
+	return shim.Success(recordJSON)
 }
 
 func (cc *SmartContract) readGrade(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
 	if len(args) < 1 {
-		return shim.Error("ID is required")
+		return shim.Error("ID required")
 	}
-	id := args[0]
-	recordJSON, err := stub.GetState(id)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to read from world state: %v", err))
-	}
-	if recordJSON == nil {
+
+	recordJSON, err := stub.GetPrivateData("collectionGrades", args[0])
+	if err != nil || recordJSON == nil {
 		return shim.Error("Record not found")
 	}
+
 	return shim.Success(recordJSON)
 }
 
 func (cc *SmartContract) updateGrade(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
 	if len(args) < 1 {
-		return shim.Error("Updated record data is required")
+		return shim.Error("Updated record required")
 	}
 
-	if err := cid.AssertAttributeValue(stub, "role", "faculty"); err != nil {
-		return shim.Error(fmt.Sprintf("Role check failed: The user does not have the 'faculty' role required to update grades. Error: %v", err))
+	mspID, _ := cid.GetMSPID(stub)
+	if mspID != "FacultyMSP" {
+		return shim.Error("OBAC Denied: Only FacultyMSP can update grades")
+	}
+	role, found := getSafeAttribute(stub, "role")
+	if !found || role != "faculty" {
+		return shim.Error("ABAC Denied: Missing 'faculty' role.")
 	}
 
-	var updatedRecord AcademicRecord
-	if err := json.Unmarshal([]byte(args[0]), &updatedRecord); err != nil {
-		return shim.Error(fmt.Sprintf("Invalid JSON input for update: %v", err))
-	}
+	var updated AcademicRecord
+	json.Unmarshal([]byte(args[0]), &updated)
 
-	existingJSON, err := stub.GetState(updatedRecord.ID)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to read from world state: %v", err))
-	}
+	existingJSON, _ := stub.GetPrivateData("collectionGrades", updated.ID)
 	if existingJSON == nil {
-		return shim.Error("Cannot update: Record does not exist.")
+		return shim.Error("Record does not exist")
 	}
 
-	var existingRecord AcademicRecord
-	if err := json.Unmarshal(existingJSON, &existingRecord); err != nil {
-		return shim.Error(fmt.Sprintf("Failed to unmarshal existing record: %v", err))
-	}
-	submitterID, err := cid.GetID(stub)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to get submitter ID: %v", err))
-	}
+	var existing AcademicRecord
+	json.Unmarshal(existingJSON, &existing)
 
-	existingRecord.Grade = updatedRecord.Grade
-	existingRecord.FacultyID = submitterID 
-	existingRecord.Date = updatedRecord.Date
-	existingRecord.Status = "Corrected" 
-	existingRecord.Version++            
-
-	recordJSON, err := json.Marshal(existingRecord)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to marshal updated record: %v", err))
+	submitterID, _ := cid.GetID(stub)
+	if existing.FacultyID != submitterID {
+		return shim.Error("Only the original professor who issued the grade can update it")
 	}
 
-	if err := stub.PutState(existingRecord.ID, recordJSON); err != nil {
-		return shim.Error(fmt.Sprintf("Failed to write updated record to world state: %v", err))
+	existing.Grade = updated.Grade
+	existing.Date = updated.Date
+	existing.Status = "Corrected"
+	existing.Version++
+
+	recordJSON, _ := json.Marshal(existing)
+	stub.PutPrivateData("collectionGrades", existing.ID, recordJSON)
+
+	return shim.Success(recordJSON)
+}
+
+func (cc *SmartContract) approveGrade(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
+	if len(args) < 1 {
+		return shim.Error("Record ID required")
 	}
 
-	return shim.Success([]byte(fmt.Sprintf(`{"status":"success","id":"%s"}`, existingRecord.ID)))
+	mspID, _ := cid.GetMSPID(stub)
+	role, found := getSafeAttribute(stub, "role")
+	
+	if !found {
+		return shim.Error("ABAC Denied: User role attribute not found.")
+	}
+
+	isDeptAdmin := mspID == "DepartmentMSP" && role == "department_admin"
+	isRegistrar := mspID == "RegistrarMSP" && role == "registrar"
+
+	if !isDeptAdmin && !isRegistrar {
+		return shim.Error("OBAC/ABAC Denied: Only Department Admin or Registrar can approve grades.")
+	}
+
+	recordJSON, _ := stub.GetPrivateData("collectionGrades", args[0])
+	if recordJSON == nil {
+		return shim.Error("Record not found")
+	}
+
+	var record AcademicRecord
+	json.Unmarshal(recordJSON, &record)
+
+	record.Status = "DepartmentApproved"
+	updatedJSON, _ := json.Marshal(record)
+	stub.PutPrivateData("collectionGrades", args[0], updatedJSON)
+
+	return shim.Success(updatedJSON)
+}
+
+func (cc *SmartContract) finalizeRecord(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
+	if len(args) < 1 {
+		return shim.Error("Record ID required")
+	}
+
+	mspID, _ := cid.GetMSPID(stub)
+	role, found := getSafeAttribute(stub, "role")
+	
+	if !found {
+		return shim.Error("ABAC Denied: User role attribute not found.")
+	}
+
+	isRegistrar := mspID == "RegistrarMSP" && role == "registrar"
+	isDeptAdmin := mspID == "DepartmentMSP" && role == "department_admin"
+
+	if !isRegistrar && !isDeptAdmin {
+		return shim.Error("OBAC/ABAC Denied: Only Registrar or Department Admin can finalize records.")
+	}
+
+	recordJSON, _ := stub.GetPrivateData("collectionGrades", args[0])
+	if recordJSON == nil {
+		return shim.Error("Record not found")
+	}
+
+	var record AcademicRecord
+	json.Unmarshal(recordJSON, &record)
+
+	record.Status = "Finalized"
+	updatedJSON, _ := json.Marshal(record)
+	stub.PutPrivateData("collectionGrades", args[0], updatedJSON)
+
+	return shim.Success(updatedJSON)
 }
 
 func (cc *SmartContract) getAllGrades(stub shim.ChaincodeStubInterface) *pb.Response {
-	resultsIterator, err := stub.GetStateByRange("", "")
+	resultsIterator, err := stub.GetPrivateDataByRange("collectionGrades", "", "")
 	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to get world state: %v", err))
+		return shim.Error("Query failed")
 	}
 	defer resultsIterator.Close()
 
 	var records []AcademicRecord
 	for resultsIterator.HasNext() {
-		queryResponse, err := resultsIterator.Next()
-		if err != nil {
-			return shim.Error(fmt.Sprintf("Failed to iterate world state: %v", err))
-		}
-
+		queryResponse, _ := resultsIterator.Next()
 		var record AcademicRecord
-		if err := json.Unmarshal(queryResponse.Value, &record); err != nil {
-			log.Printf("Could not unmarshal world state data: %v", err)
-			continue
-		}
+		json.Unmarshal(queryResponse.Value, &record)
 		records = append(records, record)
 	}
 
-	recordsJSON, err := json.Marshal(records)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("Failed to marshal records: %v", err))
-	}
-
+	recordsJSON, _ := json.Marshal(records)
 	return shim.Success(recordsJSON)
 }
 
 func main() {
-    tlsDisabled := os.Getenv("CHAINCODE_TLS_DISABLED") == "true"
-    ccID := os.Getenv("CHAINCODE_ID")
-    address := os.Getenv("CHAINCODE_SERVER_ADDRESS")
+	tlsDisabled := os.Getenv("CHAINCODE_TLS_DISABLED") == "true"
+	ccID := os.Getenv("CHAINCODE_ID")
+	address := os.Getenv("CHAINCODE_SERVER_ADDRESS")
 
-    log.Printf("[1] ID: %s | Address: %s | TLS Disabled: %t", ccID, address, tlsDisabled)
+	server := &shim.ChaincodeServer{
+		CCID:    ccID,
+		Address: address,
+		CC:      new(SmartContract),
+	}
 
-    server := &shim.ChaincodeServer{
-        CCID:    ccID,
-        Address: address,
-        CC:      new(SmartContract),
-    }
+	if tlsDisabled {
+		server.TLSProps = shim.TLSProperties{Disabled: true}
+	} else {
+		server.TLSProps = shim.TLSProperties{
+			Disabled:      false,
+			Key:           readFile(os.Getenv("CHAINCODE_TLS_KEY_FILE")),
+			Cert:          readFile(os.Getenv("CHAINCODE_TLS_CERT_FILE")),
+			ClientCACerts: readFile(os.Getenv("CHAINCODE_CLIENT_CA_CERT_FILE")),
+		}
+	}
 
-    if tlsDisabled {
-        log.Printf("[2] FORCING PLAIN TEXT MODE (No TLS)")
-        server.TLSProps = shim.TLSProperties{Disabled: true}
-    } else {
-        log.Printf("[2] ATTEMPTING SECURE MODE")
-        server.TLSProps = shim.TLSProperties{
-            Disabled: false,
-            Key:      readFile(os.Getenv("CHAINCODE_TLS_KEY_FILE")),
-            Cert:     readFile(os.Getenv("CHAINCODE_TLS_CERT_FILE")),
-            ClientCACerts: readFile(os.Getenv("CHAINCODE_CLIENT_CA_CERT_FILE")),
-        }
-    }
-
-    log.Printf("[3] INVOKING START...")
-    if err := server.Start(); err != nil {
-        log.Fatalf("Critical Error: %v", err)
-    }
+	if err := server.Start(); err != nil {
+		log.Fatalf("Chaincode start error: %v", err)
+	}
 }
 
 func readFile(path string) []byte {
@@ -223,7 +288,7 @@ func readFile(path string) []byte {
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		log.Fatalf("[ERROR] Could not read file at %s: %v", path, err)
+		log.Fatalf("Failed to read file: %s", path)
 	}
 	return content
 }

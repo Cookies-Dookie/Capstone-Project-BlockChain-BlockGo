@@ -1,14 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
-using System.Linq;
 using System.Net.Http;
-using System.Text;
-using System.Text.Json;
+using System.Net.Http.Json;
 using System.Threading.Tasks;
-using Client_app.Services;
-using Client_app.Models;
 using For_Testing_Only_Capstone.Models;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Client_app.Controllers
 {
@@ -18,66 +16,55 @@ namespace Client_app.Controllers
     {
         private readonly RegistrarDbContext _context;
         private readonly IHttpClientFactory _httpClientFactory;
-        private readonly IFabricCaAuthService _fabricCaAuthService;
-        private readonly IConfiguration _configuration; 
+        private readonly IConfiguration _configuration;
+        private readonly ILogger<Registrar_RevocationController> _logger;
 
-        public Registrar_RevocationController(RegistrarDbContext context, IHttpClientFactory httpClientFactory, IFabricCaAuthService fabricCaAuthService, IConfiguration configuration)
+        public Registrar_RevocationController(RegistrarDbContext context, IHttpClientFactory httpClientFactory, IConfiguration configuration, ILogger<Registrar_RevocationController> logger)
         {
             _context = context;
             _httpClientFactory = httpClientFactory;
-            _fabricCaAuthService = fabricCaAuthService;
             _configuration = configuration;
+            _logger = logger;
         }
 
-        [HttpPost("revoke/{username}")]
-        public async Task<IActionResult> RevokeAccess(string username)
+        [HttpDelete("revoke/{sqlRequestId}")]
+public async Task<IActionResult> RevokeAccess(int sqlRequestId)
+{
+    try
+    {
+        var sqlRecord = await _context.Userrequests.FindAsync(sqlRequestId);
+        if (sqlRecord == null || sqlRecord.Requeststatus != "APPROVED")
+            return BadRequest(new { status = "Error", message = "User not in APPROVED state" });
+
+        var middlewareUrl = _configuration["Middleware:Url"] ?? "http://localhost:4000";
+        using var client = _httpClientFactory.CreateClient("FabricCAClient");
+        
+        string mappedRole = "student";
+        if (sqlRecord.Role != null)
         {
-            try
-            {
-                using var httpClient = _httpClientFactory.CreateClient("FabricCAClient");
+            var r = sqlRecord.Role.ToLower();
+            if (r == "prof" || r == "faculty") mappedRole = "faculty";
+            else if (r == "dean" || r == "department" || r == "department_admin" || r == "dept") mappedRole = "department_admin";
+            else if (r == "registrar") mappedRole = "registrar";
+        }
 
-                var revokePayload = new { id = username };
-                string revokeJson = JsonSerializer.Serialize(revokePayload);
-                string revokeToken = _fabricCaAuthService.GenerateAuthToken("POST", "/api/v1/revoke", revokeJson);
+        var payload = new { 
+            username = sqlRecord.Email,
+            role = mappedRole 
+        };
 
-                var caBaseUrl = _configuration["FabricCA:Url"];
-                var revokeMessage = new HttpRequestMessage(HttpMethod.Post, $"{caBaseUrl}/api/v1/revoke")
-                {
-                    Content = new StringContent(revokeJson, Encoding.UTF8, "application/json")
-                };
-                revokeMessage.Headers.TryAddWithoutValidation("Authorization", revokeToken);
+        var revokeRes = await client.PostAsJsonAsync($"{middlewareUrl}/api/revoke", payload);
+        
+        if (revokeRes.IsSuccessStatusCode)
+        {
+            sqlRecord.Requeststatus = "REVOKED";
+            await _context.SaveChangesAsync();
+            return Ok(new { status = "Success", message = "Access Revoked and Wallet Cleaned" });
+        }
 
-                var revokeResponse = await httpClient.SendAsync(revokeMessage);
-                if (!revokeResponse.IsSuccessStatusCode)
-                {
-                    var err = await revokeResponse.Content.ReadAsStringAsync();
-                    return StatusCode((int)revokeResponse.StatusCode, new { status = "Error", message = $"Revocation failed: {err}" });
-                }
-
-                var crlPayload = new { };
-                string crlJson = JsonSerializer.Serialize(crlPayload);
-                string crlToken = _fabricCaAuthService.GenerateAuthToken("POST", "/api/v1/gencrl", crlJson);
-
-                var crlMessage = new HttpRequestMessage(HttpMethod.Post, $"{caBaseUrl}/api/v1/gencrl")
-                {
-                    Content = new StringContent(crlJson, Encoding.UTF8, "application/json")
-                };
-                crlMessage.Headers.TryAddWithoutValidation("Authorization", crlToken);
-                await httpClient.SendAsync(crlMessage);
-
-                var sqlUser = await _context.Userrequests.FirstOrDefaultAsync(u => u.Email == username);
-                if (sqlUser != null)
-                {
-                    sqlUser.Requeststatus = "REVOKED";
-                    await _context.SaveChangesAsync();
-                }
-
-                return Ok(new { status = "Success", message = $"Access for '{username}' has been revoked and the Certificate Revocation List (CRL) has been updated." });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { status = "Error", message = ex.Message });
-            }
+        return StatusCode((int)revokeRes.StatusCode, await revokeRes.Content.ReadAsStringAsync());
+    }
+    catch (Exception ex) { return StatusCode(500, new { status = "Error", message = ex.Message }); }
         }
     }
 }

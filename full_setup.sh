@@ -14,9 +14,9 @@ echo "=== Step 1: Create channel ==="
 peer channel create \
   -o orderer.capstone.com:7050 \
   -c registrar-channel \
-  -f /opt/fabric-config/channel-artifacts/registrar-channel.tx \
+  -f /opt/fabric-config/network/channel-artifacts/registrar-channel.tx \
   --tls \
-  --cafile $ORDERER_CA
+  --cafile $ORDERER_CA || echo "Channel already exists or .tx missing, moving on..."
 
 echo -e "\n=== Step 2: Join all peers to channel ==="
 for i in 0 1 2 3 4 5; do

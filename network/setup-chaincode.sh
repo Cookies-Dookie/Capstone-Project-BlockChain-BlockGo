@@ -66,7 +66,7 @@ rm -f metadata.json connection.json code.tar.gz registrar-chaincode.tar.gz
 
 echo "=== Creating CCAAS chaincode package ==="
 echo '{"type":"ccaas","label":"registrar-chaincode_1.0"}' > metadata.json
-echo '{"address":"registrar-chaincode:9999","dial_timeout":"10s","tls_required":true}' > connection.json
+echo '{"address":"registrar-chaincode:9999","dial_timeout":"10s","tls_required":false,"client_auth_required":false,"client_auth_type":"NoClientCert"}' > connection.json
 
 tar czf code.tar.gz connection.json
 tar czf registrar-chaincode.tar.gz metadata.json code.tar.gz
@@ -113,25 +113,40 @@ else
   echo "⚠️  Warning: 'chaincode' directory not found. Please update .env manually with Package ID: $PKG_ID"
 fi
 
-echo -e "\n=== Approving for RegistrarMSP ==="
+# Check if chaincode is already committed and get current sequence
+COMMITTED=$(peer lifecycle chaincode querycommitted --channelID registrar-channel --name registrar-chaincode 2>/dev/null | grep -c "Committed chaincode definition") || true
+
+if [ "$COMMITTED" -gt 0 ]; then
+  CURRENT_SEQUENCE=$(peer lifecycle chaincode querycommitted --channelID registrar-channel --name registrar-chaincode 2>/dev/null | grep "Sequence:" | grep -oE '[0-9]+' | tail -1)
+  if [ -z "$CURRENT_SEQUENCE" ]; then
+    CURRENT_SEQUENCE=1
+  fi
+  SEQUENCE=$((CURRENT_SEQUENCE + 1))
+  echo -e "\n=== Chaincode already committed at sequence $CURRENT_SEQUENCE. Upgrading to sequence $SEQUENCE ==="
+else
+  echo -e "\n=== First deployment. Using sequence 1 ==="
+  SEQUENCE=1
+fi
+
+echo -e "\n=== Approving for RegistrarMSP (Sequence: $SEQUENCE) ==="
 peer lifecycle chaincode approveformyorg \
   -o orderer.capstone.com:7050 \
   --channelID registrar-channel \
   --name registrar-chaincode \
   --version 1.0 \
   --package-id $PKG_ID \
-  --sequence 1 \
+  --sequence $SEQUENCE \
   --tls \
   --cafile $ORDERER_CA \
   --connTimeout 120s
 
-echo -e "\n=== Committing to channel ==="
+echo -e "\n=== Committing to channel (Sequence: $SEQUENCE) ==="
 peer lifecycle chaincode commit \
   -o orderer.capstone.com:7050 \
   --channelID registrar-channel \
   --name registrar-chaincode \
   --version 1.0 \
-  --sequence 1 \
+  --sequence $SEQUENCE \
   --tls \
   --cafile $ORDERER_CA \
   --connTimeout 120s \

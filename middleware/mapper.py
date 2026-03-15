@@ -11,6 +11,7 @@ class DegreeMapper:
         self.university = "PLV"
 
     def hash_student_id(self, student_id):
+        secret_salt = "PLV_SECRET_SECRET1251"
         return hashlib.sha256(student_id.encode()).hexdigest()
 
     def upload_to_ipfs(self, file_path):

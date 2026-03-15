@@ -5,20 +5,46 @@ networks:
     name: registrar-net
 
 services:
+  # --- CERTIFICATE AUTHORITIES ---
   ca.registrar.capstone.com:
-    image: hyperledger/fabric-ca:${CA_VERSION}
+    image: hyperledger/fabric-ca:${CA_VERSION:-1.5.7}
     container_name: ca.registrar.capstone.com
     environment:
       - FABRIC_CA_HOME=/etc/hyperledger/fabric-ca-server
       - FABRIC_CA_SERVER_CA_NAME=ca-registrar
       - FABRIC_CA_SERVER_TLS_ENABLED=true
     ports: ["7054:7054"]
-    command: sh -c 'fabric-ca-server start -b admin:adminpw -d --cfg.identities.allowremove'
+    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
     volumes: ["./fabric-ca/registrar:/etc/hyperledger/fabric-ca-server"]
     networks: [registrar-net]
 
+  ca.faculty.capstone.com:
+    image: hyperledger/fabric-ca:${CA_VERSION:-1.5.7}
+    container_name: ca.faculty.capstone.com
+    environment:
+      - FABRIC_CA_HOME=/etc/hyperledger/fabric-ca-server
+      - FABRIC_CA_SERVER_CA_NAME=ca-faculty
+      - FABRIC_CA_SERVER_TLS_ENABLED=true
+    ports: ["8054:7054"]
+    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
+    volumes: ["./fabric-ca/faculty:/etc/hyperledger/fabric-ca-server"]
+    networks: [registrar-net]
+
+  ca.department.capstone.com:
+    image: hyperledger/fabric-ca:${CA_VERSION:-1.5.7}
+    container_name: ca.department.capstone.com
+    environment:
+      - FABRIC_CA_HOME=/etc/hyperledger/fabric-ca-server
+      - FABRIC_CA_SERVER_CA_NAME=ca-department
+      - FABRIC_CA_SERVER_TLS_ENABLED=true
+    ports: ["9054:7054"]
+    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
+    volumes: ["./fabric-ca/department:/etc/hyperledger/fabric-ca-server"]
+    networks: [registrar-net]
+
+  # --- ORDERER ---
   orderer.capstone.com:
-    image: hyperledger/fabric-orderer:${FABRIC_VERSION}
+    image: hyperledger/fabric-orderer:${FABRIC_VERSION:-2.5.4}
     container_name: orderer.capstone.com
     environment:
       - ORDERER_GENERAL_LISTENADDRESS=0.0.0.0
@@ -35,206 +61,228 @@ services:
       - ORDERER_ADMIN_TLS_ENABLED=true
       - ORDERER_ADMIN_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
       - ORDERER_ADMIN_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
-      - ORDERER_ADMIN_TLS_CLIENTAUTHREQUIRED=true
       - ORDERER_ADMIN_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
-    ports: ["7050:7050", "9443:9443", "7053:7053"]
+    ports: ["7050:7050", "7053:7053"]
     networks: [registrar-net]
     volumes:
       - ./channel-artifacts/genesis.block:/var/hyperledger/orderer/orderer.genesis.block
       - ./crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/msp:/var/hyperledger/orderer/msp
       - ./crypto-config/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls:/var/hyperledger/orderer/tls
 
-  node1: &couchdb_base
-    image: couchdb:latest
-    environment: [COUCHDB_USER=capstone, COUCHDB_PASSWORD=pass123, COUCHDB_SINGLE_NODE=true]
+  couchdb_registrar:
+    image: couchdb:3.3.2
+    container_name: couchdb_registrar
+    environment:
+      - COUCHDB_USER=${COUCHDB_USER:-admin}
+      - COUCHDB_PASSWORD=${COUCHDB_PASS:-password}
+      - COUCHDB_SINGLE_NODE=true
+    ports: ["5985:5984"]
     networks: [registrar-net]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5984"]
-      interval: 20s
-      retries: 5
-  node2: { <<: *couchdb_base, container_name: node2 }
-  node3: { <<: *couchdb_base, container_name: node3 }
-  node4: { <<: *couchdb_base, container_name: node4 }
-  node5: { <<: *couchdb_base, container_name: node5 }
-  node6: { <<: *couchdb_base, container_name: node6 }
 
+  couchdb_faculty:
+    image: couchdb:3.3.2
+    container_name: couchdb_faculty
+    environment:
+      - COUCHDB_USER=${COUCHDB_USER:-admin}
+      - COUCHDB_PASSWORD=${COUCHDB_PASS:-password}
+      - COUCHDB_SINGLE_NODE=true
+    ports: ["6984:5984"]
+    networks: [registrar-net]
+
+  couchdb_department:
+    image: couchdb:3.3.2
+    container_name: couchdb_department
+    environment:
+      - COUCHDB_USER=${COUCHDB_USER:-admin}
+      - COUCHDB_PASSWORD=${COUCHDB_PASS:-password}
+      - COUCHDB_SINGLE_NODE=true
+    ports: ["7984:5984"]
+    networks: [registrar-net]
+
+  # --- PEERS ---
   peer0.registrar.capstone.com:
-    image: hyperledger/fabric-peer:${FABRIC_VERSION}
     container_name: peer0.registrar.capstone.com
+    image: hyperledger/fabric-peer:${FABRIC_VERSION:-2.5.4}
     environment:
       - CORE_PEER_ID=peer0.registrar.capstone.com
       - CORE_PEER_ADDRESS=peer0.registrar.capstone.com:7051
       - CORE_PEER_LOCALMSPID=RegistrarMSP
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=node1:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=capstone
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=pass123
-      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=registrar-net
-      - CORE_CHAINCODE_EXTERNAL_BUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder"}]
-      - CORE_PEER_CHAINCODEADDRESS=registrar-chaincode:9999
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb_registrar:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${COUCHDB_USER:-admin}
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${COUCHDB_PASS:-password}
       - CORE_PEER_TLS_ENABLED=true
-      - CORE_PEER_CHAINCODE_TLS_ENABLED=false      
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.registrar.capstone.com:7051
-      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/msp
-      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/server.crt
-      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/server.key
-      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/msp
     ports: ["7051:7051"]
     networks: [registrar-net]
-    volumes: [/var/run/docker.sock:/host/var/run/docker.sock, ./crypto-config:/etc/hyperledger/crypto-config]
-    depends_on: { node1: { condition: service_healthy } }
+    volumes: ["./crypto-config:/etc/hyperledger/fabric/crypto-config"]
+    depends_on: [couchdb_registrar]
 
   peer1.registrar.capstone.com:
-    image: hyperledger/fabric-peer:${FABRIC_VERSION}
     container_name: peer1.registrar.capstone.com
+    image: hyperledger/fabric-peer:${FABRIC_VERSION:-2.5.4}
     environment:
       - CORE_PEER_ID=peer1.registrar.capstone.com
       - CORE_PEER_ADDRESS=peer1.registrar.capstone.com:7051
       - CORE_PEER_LOCALMSPID=RegistrarMSP
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=node2:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=capstone
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=pass123
-      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=registrar-net
-      - CORE_CHAINCODE_EXTERNAL_BUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder"}]
-      - CORE_PEER_CHAINCODEADDRESS=registrar-chaincode:9999
-      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb_registrar:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${COUCHDB_USER:-admin}
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${COUCHDB_PASS:-password}
       - CORE_PEER_TLS_ENABLED=true
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.registrar.capstone.com:7051
-      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/msp
-      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/tls/server.crt
-      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/tls/server.key
-      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer1.registrar.capstone.com/msp
     ports: ["8051:7051"]
     networks: [registrar-net]
-    volumes: ["./crypto-config:/etc/hyperledger/crypto-config"]
-    depends_on: { node2: { condition: service_healthy } }
+    volumes: ["./crypto-config:/etc/hyperledger/fabric/crypto-config"]
+    depends_on: [couchdb_registrar]
 
-  peer2.registrar.capstone.com:
-    image: hyperledger/fabric-peer:${FABRIC_VERSION}
-    container_name: peer2.registrar.capstone.com
+  peer0.faculty.capstone.com:
+    container_name: peer0.faculty.capstone.com
+    image: hyperledger/fabric-peer:${FABRIC_VERSION:-2.5.4}
     environment:
-      - CORE_PEER_ID=peer2.registrar.capstone.com
-      - CORE_PEER_ADDRESS=peer2.registrar.capstone.com:7051
-      - CORE_PEER_LOCALMSPID=RegistrarMSP
+      - CORE_PEER_ID=peer0.faculty.capstone.com
+      - CORE_PEER_ADDRESS=peer0.faculty.capstone.com:7051
+      - CORE_PEER_LOCALMSPID=FacultyMSP
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=node3:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=capstone
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=pass123
-      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=registrar-net
-      - CORE_CHAINCODE_EXTERNAL_BUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder"}]
-      - CORE_PEER_CHAINCODEADDRESS=registrar-chaincode:9999
-      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb_faculty:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${COUCHDB_USER:-admin}
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${COUCHDB_PASS:-password}
       - CORE_PEER_TLS_ENABLED=true
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.registrar.capstone.com:7051
-      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer2.registrar.capstone.com/msp
-      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer2.registrar.capstone.com/tls/server.crt
-      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer2.registrar.capstone.com/tls/server.key
-      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer2.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer0.faculty.capstone.com/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer0.faculty.capstone.com/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer0.faculty.capstone.com/tls/ca.crt
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer0.faculty.capstone.com/msp
     ports: ["9051:7051"]
     networks: [registrar-net]
-    volumes: ["./crypto-config:/etc/hyperledger/crypto-config"]
-    depends_on: { node3: { condition: service_healthy } }
+    volumes: ["./crypto-config:/etc/hyperledger/fabric/crypto-config"]
+    depends_on: [couchdb_faculty]
 
-  peer3.registrar.capstone.com:
-    image: hyperledger/fabric-peer:${FABRIC_VERSION}
-    container_name: peer3.registrar.capstone.com
+  peer1.faculty.capstone.com:
+    container_name: peer1.faculty.capstone.com
+    image: hyperledger/fabric-peer:${FABRIC_VERSION:-2.5.4}
     environment:
-      - CORE_PEER_ID=peer3.registrar.capstone.com
-      - CORE_PEER_ADDRESS=peer3.registrar.capstone.com:7051
-      - CORE_PEER_LOCALMSPID=RegistrarMSP
+      - CORE_PEER_ID=peer1.faculty.capstone.com
+      - CORE_PEER_ADDRESS=peer1.faculty.capstone.com:7051
+      - CORE_PEER_LOCALMSPID=FacultyMSP
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=node4:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=capstone
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=pass123
-      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=registrar-net
-      - CORE_CHAINCODE_EXTERNAL_BUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder"}]
-      - CORE_PEER_CHAINCODEADDRESS=registrar-chaincode:9999
-      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb_faculty:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${COUCHDB_USER:-admin}
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${COUCHDB_PASS:-password}
       - CORE_PEER_TLS_ENABLED=true
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.registrar.capstone.com:7051
-      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer3.registrar.capstone.com/msp
-      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer3.registrar.capstone.com/tls/server.crt
-      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer3.registrar.capstone.com/tls/server.key
-      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer3.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer1.faculty.capstone.com/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer1.faculty.capstone.com/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer1.faculty.capstone.com/tls/ca.crt
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/crypto-config/peerOrganizations/faculty.capstone.com/peers/peer1.faculty.capstone.com/msp
     ports: ["10051:7051"]
     networks: [registrar-net]
-    volumes: ["./crypto-config:/etc/hyperledger/crypto-config"]
-    depends_on: { node4: { condition: service_healthy } }
+    volumes: ["./crypto-config:/etc/hyperledger/fabric/crypto-config"]
+    depends_on: [couchdb_faculty]
 
-  peer4.registrar.capstone.com:
-    image: hyperledger/fabric-peer:${FABRIC_VERSION}
-    container_name: peer4.registrar.capstone.com
+  peer0.department.capstone.com:
+    container_name: peer0.department.capstone.com
+    image: hyperledger/fabric-peer:${FABRIC_VERSION:-2.5.4}
     environment:
-      - CORE_PEER_ID=peer4.registrar.capstone.com
-      - CORE_PEER_ADDRESS=peer4.registrar.capstone.com:7051
-      - CORE_PEER_LOCALMSPID=RegistrarMSP
+      - CORE_PEER_ID=peer0.department.capstone.com
+      - CORE_PEER_ADDRESS=peer0.department.capstone.com:7051
+      - CORE_PEER_LOCALMSPID=DepartmentMSP
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=node5:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=capstone
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=pass123
-      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=registrar-net
-      - CORE_CHAINCODE_EXTERNAL_BUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder"}]
-      - CORE_PEER_CHAINCODEADDRESS=registrar-chaincode:9999
-      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb_department:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${COUCHDB_USER:-admin}
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${COUCHDB_PASS:-password}
       - CORE_PEER_TLS_ENABLED=true
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.registrar.capstone.com:7051
-      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer4.registrar.capstone.com/msp
-      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer4.registrar.capstone.com/tls/server.crt
-      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer4.registrar.capstone.com/tls/server.key
-      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer4.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer0.department.capstone.com/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer0.department.capstone.com/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer0.department.capstone.com/tls/ca.crt
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer0.department.capstone.com/msp
     ports: ["11051:7051"]
     networks: [registrar-net]
-    volumes: ["./crypto-config:/etc/hyperledger/crypto-config"]
-    depends_on: { node5: { condition: service_healthy } }
+    volumes: ["./crypto-config:/etc/hyperledger/fabric/crypto-config"]
+    depends_on: [couchdb_department]
 
-  peer5.registrar.capstone.com:
-    image: hyperledger/fabric-peer:${FABRIC_VERSION}
-    container_name: peer5.registrar.capstone.com
+  peer1.department.capstone.com:
+    container_name: peer1.department.capstone.com
+    image: hyperledger/fabric-peer:${FABRIC_VERSION:-2.5.4}
     environment:
-      - CORE_PEER_ID=peer5.registrar.capstone.com
-      - CORE_PEER_ADDRESS=peer5.registrar.capstone.com:7051
-      - CORE_PEER_LOCALMSPID=RegistrarMSP
+      - CORE_PEER_ID=peer1.department.capstone.com
+      - CORE_PEER_ADDRESS=peer1.department.capstone.com:7051
+      - CORE_PEER_LOCALMSPID=DepartmentMSP
       - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=node6:5984
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=capstone
-      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=pass123
-      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=registrar-net
-      - CORE_CHAINCODE_EXTERNAL_BUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder"}]
-      - CORE_PEER_CHAINCODEADDRESS=registrar-chaincode:9999
-      - CORE_PEER_CHAINCODE_TLS_ENABLED=false
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb_department:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=${COUCHDB_USER:-admin}
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=${COUCHDB_PASS:-password}
       - CORE_PEER_TLS_ENABLED=true
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.registrar.capstone.com:7051
-      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer5.registrar.capstone.com/msp
-      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer5.registrar.capstone.com/tls/server.crt
-      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer5.registrar.capstone.com/tls/server.key
-      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer5.registrar.capstone.com/tls/ca.crt
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer1.department.capstone.com/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer1.department.capstone.com/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer1.department.capstone.com/tls/ca.crt
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/crypto-config/peerOrganizations/department.capstone.com/peers/peer1.department.capstone.com/msp
     ports: ["12051:7051"]
     networks: [registrar-net]
-    volumes: ["./crypto-config:/etc/hyperledger/crypto-config"]
-    depends_on: { node6: { condition: service_healthy } }
+    volumes: ["./crypto-config:/etc/hyperledger/fabric/crypto-config"]
+    depends_on: [couchdb_department]
 
-  ipfs0: &ipfs_base
-    image: ipfs/kubo:latest
+  # --- IPFS NODES ---
+  ipfs0:
+    image: ${IPFS_IMAGE:-ipfs/go-ipfs:latest}
+    container_name: ipfs0
     environment: [IPFS_PROFILE=server]
     networks: [registrar-net]
-  ipfs0_serv: { <<: *ipfs_base, container_name: ipfs0, ports: ["5001:5001", "8080:8080"], volumes: ["./ipfs/peer0:/data/ipfs"] }
-  ipfs1: { <<: *ipfs_base, container_name: ipfs1, ports: ["5002:5001", "8081:8080"], volumes: ["./ipfs/peer1:/data/ipfs"] }
-  ipfs2: { <<: *ipfs_base, container_name: ipfs2, ports: ["5003:5001", "8082:8080"], volumes: ["./ipfs/peer2:/data/ipfs"] }
-  ipfs3: { <<: *ipfs_base, container_name: ipfs3, ports: ["5004:5001", "8083:8080"], volumes: ["./ipfs/peer3:/data/ipfs"] }
-  ipfs4: { <<: *ipfs_base, container_name: ipfs4, ports: ["5005:5001", "8084:8080"], volumes: ["./ipfs/peer4:/data/ipfs"] }
-  ipfs5: { <<: *ipfs_base, container_name: ipfs5, ports: ["5006:5001", "8085:8080"], volumes: ["./ipfs/peer5:/data/ipfs"] }
+    ports: ["5001:5001","8080:8080"]
+    volumes: ["./ipfs/peer0:/data/ipfs"]
 
+  ipfs1:
+    image: ${IPFS_IMAGE:-ipfs/go-ipfs:latest}
+    container_name: ipfs1
+    environment: [IPFS_PROFILE=server]
+    networks: [registrar-net]
+    ports: ["5002:5001","8081:8080"]
+    volumes: ["./ipfs/peer1:/data/ipfs"]
+
+  ipfs2:
+    image: ${IPFS_IMAGE:-ipfs/go-ipfs:latest}
+    container_name: ipfs2
+    environment: [IPFS_PROFILE=server]
+    networks: [registrar-net]
+    ports: ["5003:5001","8082:8080"]
+    volumes: ["./ipfs/peer2:/data/ipfs"]
+
+  ipfs3:
+    image: ${IPFS_IMAGE:-ipfs/go-ipfs:latest}
+    container_name: ipfs3
+    environment: [IPFS_PROFILE=server]
+    networks: [registrar-net]
+    ports: ["5004:5001","8083:8080"]
+    volumes: ["./ipfs/peer3:/data/ipfs"]
+
+  ipfs4:
+    image: ${IPFS_IMAGE:-ipfs/go-ipfs:latest}
+    container_name: ipfs4
+    environment: [IPFS_PROFILE=server]
+    networks: [registrar-net]
+    ports: ["5005:5001","8084:8080"]
+    volumes: ["./ipfs/peer4:/data/ipfs"]
+
+  ipfs5:
+    image: ${IPFS_IMAGE:-ipfs/go-ipfs:latest}
+    container_name: ipfs5
+    environment: [IPFS_PROFILE=server]
+    networks: [registrar-net]
+    ports: ["5006:5001","8085:8080"]
+    volumes: ["./ipfs/peer5:/data/ipfs"]
+
+  # --- UTILITY ---
   postgres:
     image: postgres:14-alpine
     container_name: postgres
-    environment: [POSTGRES_USER=BLOCKGO, POSTGRES_PASSWORD=PLVBLOCKGO, POSTGRES_DB=AcitivityLogs]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-BLOCKGO}
+      - POSTGRES_PASSWORD=${POSTGRES_PASS:-PLVBLOCKGO}
+      - POSTGRES_DB=${POSTGRES_DB:-ActivityLogs}
     ports: ["5432:5432"]
     networks: [registrar-net]
     volumes: ["./postgres-data:/var/lib/postgresql/data"]
@@ -249,32 +297,19 @@ services:
 
   registrar-chaincode:
     container_name: registrar-chaincode
-    image: golang:${GO_VERSION}
+    build:
+      context: ../chaincode
+      dockerfile: Dockerfile
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CHAINCODE_ID=${CC_ID}
-      - CHAINCODE_TLS_DISABLED=false
-      - CORE_PEER_TLS_ENABLED=true
-      - CHAINCODE_TLS_KEY=/tls/server.key
-      - CHAINCODE_TLS_CERT=/tls/server.crt
-      - CHAINCODE_CLIENT_CA_CERT=/tls/ca.crt
-      - CHAINCODE_TLS_KEY_FILE=/tls/server.key
-      - CHAINCODE_TLS_CERT_FILE=/tls/server.crt
-      - CHAINCODE_CLIENT_CA_CERT_FILE=/tls/ca.crt
-      - CORE_PEER_TLS_KEY_FILE=/tls/server.key
-      - CORE_PEER_TLS_CERT_FILE=/tls/server.crt
-      - CORE_PEER_TLS_ROOTCERT_FILE=/tls/ca.crt
-    working_dir: /opt/gopath/src/github.com/chaincode
-    volumes:
-      - ../chaincode:/opt/gopath/src/github.com/chaincode
-      - ./crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls:/tls
-    networks:
-      - registrar-net
-    command: sh -c "go build -o registrar && ./registrar || (echo 'Chaincode failed to start, keeping alive for debug...' && sleep 300)"
+      - CHAINCODE_ID=${CHAINCODE_ID}
+      - CHAINCODE_TLS_DISABLED=true
+    ports: ["9999:9999"]
+    networks: [registrar-net]
 
   cli:
     container_name: cli
-    image: hyperledger/fabric-tools:${FABRIC_VERSION}
+    image: hyperledger/fabric-tools:${FABRIC_VERSION:-2.5.4}
     tty: true
     stdin_open: true
     environment:
@@ -287,6 +322,7 @@ services:
       - CORE_PEER_TLS_ENABLED=true
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/users/Admin@registrar.capstone.com/msp
       - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/crypto-config/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/ca.crt
+    working_dir: /opt/fabric-config/network
     networks: [registrar-net]
     volumes:
       - /var/run/:/host/var/run/

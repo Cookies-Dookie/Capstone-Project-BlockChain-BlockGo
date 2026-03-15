@@ -1,52 +1,130 @@
+using Serilog;
 using BlockGo.Services;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 using Client_app.Services;
 using Client_app.Models;
 using For_Testing_Only_Capstone.Models;
+
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
-var builder = WebApplication.CreateBuilder(args);
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .WriteTo.File(
+        "logs/app-.txt",
+        rollingInterval: RollingInterval.Day,
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .Enrich.FromLogContext()
+    .CreateLogger();
 
-builder.Services.AddCors(options =>
+try
 {
-    options.AddPolicy("AllowFrontend", policy =>
+    Log.Information("Application starting up...");
+    
+    var builder = WebApplication.CreateBuilder(args);
+    
+    builder.Host.UseSerilog();
+
+    builder.Services.AddCors(options =>
     {
-        policy.AllowAnyOrigin()  // For production, replace this with actual frontend URL
-              .AllowAnyMethod() 
-              .AllowAnyHeader(); 
-    });
-});
-
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-
-builder.Services.AddHttpClient<IBlockchainService, BlockchainService>();
-builder.Services.AddScoped<IFabricCaAuthService, FabricCaAuthService>();
-
-builder.Services.AddHttpClient("FabricCAClient")
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    {
-        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator // For development only
+        options.AddPolicy("AllowFrontend", policy =>
+        {
+            policy.AllowAnyOrigin()
+                  .AllowAnyMethod()
+                  .AllowAnyHeader();
+        });
     });
 
+    builder.Services.AddControllers();
+    builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerGen();
 
-builder.Services.AddDbContext<RegistrarDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection") 
-    ?? "Host=127.0.0.1;Database=AcitivityLogs;Username=BLOCKGO;Password=PLVBLOCKGO"));
+    var rateLimitOptions = builder.Configuration.GetSection("RateLimiting");
+    var permitLimit = int.Parse(rateLimitOptions["PermitLimit"] ?? "10");
+    var windowSeconds = int.Parse(rateLimitOptions["WindowSeconds"] ?? "60");
 
-var app = builder.Build();
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.AddPolicy("fixed", httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: httpContext.User.Identity?.Name ?? httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+                factory: partition => new FixedWindowRateLimiterOptions
+                {
+                    AutoReplenishment = true,
+                    PermitLimit = permitLimit,
+                    Window = TimeSpan.FromSeconds(windowSeconds)
+                }));
+        
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        options.OnRejected = async (context, token) =>
+        {
+            context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            await context.HttpContext.Response.WriteAsJsonAsync(
+                new { status = "Error", message = "Too many requests. Please try again later." }, 
+                token);
+        };
+    });
 
-app.UseSwagger()
-;app.UseSwaggerUI();
+    builder.Services.AddHttpClient<IBlockchainService, BlockchainService>();
+    builder.Services.AddScoped<IFabricCaAuthService, FabricCaAuthService>();
 
+    builder.Services.AddHttpClient("FabricCAClient")
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        var handler = new HttpClientHandler();
+        bool allowInsecure = builder.Environment.IsDevelopment() || 
+                             builder.Configuration.GetValue<bool>("Security:AllowInsecureTls");
 
-app.UseCors("AllowFrontend");
+        if (allowInsecure)
+        {
+            Log.Warning("nternal Fabric CA connection: SSL validation BYPASSED (Development or Config Override)");
+            handler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
+        }
+        else
+        {
+            Log.Information("nternal Fabric CA connection: Strict SSL validation ENABLED (Production Mode)");
+            handler.ServerCertificateCustomValidationCallback = null; 
+        }
 
-app.UseHttpsRedirection();
+        handler.SslProtocols = System.Security.Authentication.SslProtocols.Tls12 |
+                               System.Security.Authentication.SslProtocols.Tls13;
+        return handler;
+    });
 
-app.UseAuthorization();
+    builder.Services.AddDbContext<RegistrarDbContext>(options =>
+        options.UseNpgsql(
+            builder.Configuration.GetConnectionString("PostgresConnection")
+            ?? "Host=127.0.0.1;Database=ActivityLogs;Username=BLOCKGO;Password=PLVBLOCKGO",
+            npgsqlOptions => npgsqlOptions.CommandTimeout((int)TimeSpan.FromMinutes(5).TotalSeconds)));
 
-app.MapControllers();
+    var app = builder.Build();
 
-app.Run();
+    app.UseSerilogRequestLogging();
+    app.UseSwagger();
+    app.UseSwaggerUI();
+    app.UseCors("AllowFrontend");
+    app.UseRateLimiter();
+
+    if (!app.Environment.IsDevelopment())
+    {
+        app.UseHsts();
+        app.UseHttpsRedirection();
+        Log.Information("HSTS and HTTPS redirection enabled");
+    }
+
+    app.UseAuthorization();
+    app.MapControllers();
+    Log.Information("Application configured successfully");
+    Log.Information("Listening on {Urls}", string.Join(", ", app.Urls));
+
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, " Application terminated unexpectedly");
+}
+finally
+{
+    await Log.CloseAndFlushAsync();
+}

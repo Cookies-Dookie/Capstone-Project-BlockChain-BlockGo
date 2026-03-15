@@ -4,34 +4,37 @@ namespace BlockGo.Models
 {
     public class GradeRequest
     {
-        [JsonPropertyName("record_id")]
-        public string StudentId { get; set; }
+        [JsonPropertyName("student_id")]
+        public string StudentId { get; set; } = string.Empty;
+        
+        [JsonPropertyName("course")]
+        public string Course { get; set; } = string.Empty;
 
         [JsonPropertyName("student_hash")]
-        public string StudentHash { get; set; }
+        public string StudentHash { get; set; } = string.Empty;
 
         [JsonPropertyName("subject_code")]
-        public string SubjectCode { get; set; }
+        public string SubjectCode { get; set; } = string.Empty;
 
         [JsonPropertyName("subject_name")]
-        public string SubjectName { get; set; }
+        public string SubjectName { get; set; } = string.Empty;
 
         [JsonPropertyName("section")]
-        public string Section { get; set; }
+        public string Section { get; set; } = string.Empty;
 
         [JsonPropertyName("grade")]
-        public string Grade { get; set; }
+        public string Grade { get; set; } = string.Empty;
 
         [JsonPropertyName("semester")]
-        public string Semester { get; set; }
+        public string Semester { get; set; } = string.Empty;
 
         [JsonPropertyName("school_year")]
-        public string SchoolYear { get; set; }
+        public string SchoolYear { get; set; } = string.Empty;
 
         [JsonPropertyName("faculty_id")]
-        public string FacultyId { get; set; }
+        public string FacultyId { get; set; } = string.Empty;
 
         [JsonPropertyName("date")]
-        public string Date { get; set; }
+        public string Date { get; set; } = string.Empty;
     }
 }

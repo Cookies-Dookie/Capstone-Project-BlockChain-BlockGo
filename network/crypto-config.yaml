@@ -4,11 +4,28 @@ OrdererOrgs:
     EnableNodeOUs: true
     Specs:
       - Hostname: orderer
+
 PeerOrgs:
   - Name: Registrar
     Domain: registrar.capstone.com
     EnableNodeOUs: true
     Template:
       Count: 6
+    Users:
+      Count: 1
+
+  - Name: Department
+    Domain: department.capstone.com
+    EnableNodeOUs: true
+    Template:
+      Count: 2
+    Users:
+      Count: 1
+
+  - Name: Faculty
+    Domain: faculty.capstone.com
+    EnableNodeOUs: true
+    Template:
+      Count: 2
     Users:
       Count: 1
