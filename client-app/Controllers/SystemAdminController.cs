@@ -5,6 +5,9 @@ using Npgsql;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Linq;
+using Client_app.Models;
+using System.Text.Json;
+using System.Reflection;
 
 namespace Client_app.Controllers;
 
@@ -223,7 +226,8 @@ public sealed class SystemAdminController : ControllerBase
                 maxMemoryMb = _configuration.GetValue<int?>("PerformanceBaseline:MaxMemoryMb") ?? 1024
             };
 
-            dynamic current = _trafficMetrics.Snapshot();
+            var snapshotObj = _trafficMetrics.Snapshot();
+            var current = MapToTrafficSnapshot(snapshotObj);
 
             return new
             {
@@ -231,16 +235,92 @@ public sealed class SystemAdminController : ControllerBase
                 current,
                 analysis = new
                 {
-                    requestLoadOk = (current.requestsToday ?? 0) <= 10000,
-                    userLoadOk = (current.activeUsers ?? 0) <= 200,
+                    requestLoadOk = (current?.RequestsToday ?? 0) <= 10000,
+                    userLoadOk = (current?.ActiveUsers ?? 0) <= 200,
                     baselineComparison = new
                     {
-                        requestsToday = (current.requestsToday ?? 0),
-                        averageTrafficKb = (current.averageTrafficKb ?? 0),
-                        activeUsers = (current.activeUsers ?? 0)
+                        requestsToday = (current?.RequestsToday ?? 0),
+                        averageTrafficKb = (current?.AverageTrafficKb ?? 0),
+                        activeUsers = (current?.ActiveUsers ?? 0)
                     }
                 }
             };
+        }
+    }
+
+    private static TrafficSnapshot? MapToTrafficSnapshot(object? snapshot)
+    {
+        if (snapshot == null) return null;
+
+        if (snapshot is TrafficSnapshot ts) return ts;
+
+        try
+        {
+            // If it's a JsonElement (anonymous object serialized), attempt to deserialize
+            if (snapshot is JsonElement je)
+            {
+                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                return JsonSerializer.Deserialize<TrafficSnapshot>(je.GetRawText(), opts);
+            }
+
+            if (snapshot is string s)
+            {
+                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                return JsonSerializer.Deserialize<TrafficSnapshot>(s, opts);
+            }
+
+            // Try serialize-then-deserialize as fallback for anonymous types
+            var serialized = JsonSerializer.Serialize(snapshot);
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var deserialized = JsonSerializer.Deserialize<TrafficSnapshot>(serialized, options);
+            if (deserialized != null) return deserialized;
+
+            // Last resort: use reflection to read likely property names
+            var type = snapshot.GetType();
+            int TryGetInt(params string[] names)
+            {
+                foreach (var n in names)
+                {
+                    var prop = type.GetProperty(n, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
+                    if (prop != null)
+                    {
+                        var val = prop.GetValue(snapshot);
+                        if (val == null) continue;
+                        if (val is int i) return i;
+                        if (int.TryParse(Convert.ToString(val), out var parsed)) return parsed;
+                    }
+                }
+                return 0;
+            }
+
+            double TryGetDouble(params string[] names)
+            {
+                foreach (var n in names)
+                {
+                    var prop = type.GetProperty(n, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
+                    if (prop != null)
+                    {
+                        var val = prop.GetValue(snapshot);
+                        if (val == null) continue;
+                        if (val is double d) return d;
+                        if (double.TryParse(Convert.ToString(val), out var parsed)) return parsed;
+                    }
+                }
+                return 0;
+            }
+
+            var result = new TrafficSnapshot
+            {
+                RequestsToday = TryGetInt("requestsToday", "RequestsToday", "requests_today"),
+                ActiveUsers = TryGetInt("activeUsers", "ActiveUsers", "active_users"),
+                AverageTrafficKb = TryGetDouble("averageTrafficKb", "AverageTrafficKb", "average_traffic_kb", "averageTrafficKb")
+            };
+
+            return result;
+        }
+        catch
+        {
+            return null;
         }
     }
 }
