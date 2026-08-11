@@ -1,0 +1,67 @@
+name: Automatic backup on staging/testing push
+
+on:
+  push:
+    branches:
+      - staging
+      - testing
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    name: Create backup and save
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare timestamp
+        run: echo "TIMESTAMP=$(date -u +'%Y%m%dT%H%M%SZ')" >> $GITHUB_ENV
+
+      - name: Create archive
+        run: |
+          BACKUP_NAME="${{ github.repository }}-${{ github.ref_name }}-${TIMESTAMP}.tar.gz"
+          tar -czf "$BACKUP_NAME" .
+          echo "BACKUP_PATH=$PWD/$BACKUP_NAME" >> $GITHUB_ENV
+
+      - name: Upload artifact (short-term)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ github.ref_name }}-${{ github.sha }}
+          path: ${{ env.BACKUP_PATH }}
+
+      - name: Push backup to backups branch (persistent)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          BACKUP_FILE="${{ env.BACKUP_PATH }}"
+          TARGET_DIR="backups/${{ github.ref_name }}/${TIMESTAMP}"
+          TMP_DIR=$(mktemp -d)
+          cp "$BACKUP_FILE" "$TMP_DIR/"
+          cd "$TMP_DIR"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          # Fetch backups branch if it exists on remote
+          git fetch origin backups || true
+          if git ls-remote --exit-code --heads origin backups; then
+            git checkout -b backups origin/backups
+          else
+            git checkout --orphan backups
+            git rm -rf . || true
+          fi
+          FNAME=$(basename "$BACKUP_FILE")
+          mkdir -p "$TARGET_DIR"
+          mv "$FNAME" "$TARGET_DIR/"
+          git add .
+          if git commit -m "Backup: ${{ github.ref_name }} ${{ github.sha }} ${TIMESTAMP}" >/dev/null 2>&1; then
+            git push origin backups
+          else
+            echo "Nothing new to commit"
+          fi
