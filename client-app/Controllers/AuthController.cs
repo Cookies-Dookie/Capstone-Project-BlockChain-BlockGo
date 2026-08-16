@@ -28,7 +28,7 @@ namespace Client_app.Controllers
     public class AuthController : ControllerBase
     {
         private const string EmailLogoContentId = "plv-logo";
-        private readonly string _connectionString;
+        private readonly NpgsqlDataSource _dataSource;
         private readonly IMemoryCache _cache;
         private readonly IConfiguration _configuration;
         private readonly IEmailService _emailService;
@@ -36,10 +36,10 @@ namespace Client_app.Controllers
         private readonly ILogger<AuthController> _logger;
         private readonly IHubContext<ChatHub> _chatHubContext;
 
-        public AuthController(IConfiguration configuration, IMemoryCache memoryCache, IEmailService emailService, IHttpClientFactory httpClientFactory, ILogger<AuthController> logger, IHubContext<ChatHub> chatHubContext)
+        public AuthController(NpgsqlDataSource dataSource, IMemoryCache memoryCache, IEmailService emailService, IHttpClientFactory httpClientFactory, ILogger<AuthController> logger, IHubContext<ChatHub> chatHubContext, IConfiguration configuration)
         {
-            _connectionString = configuration.GetConnectionString("PostgresConnection") ?? throw new InvalidOperationException("PostgreSQL connection string 'PostgresConnection' not found.");
             _cache = memoryCache;
+            _dataSource = dataSource;
             _configuration = configuration;
             _emailService = emailService;
             _httpClientFactory = httpClientFactory;
@@ -49,12 +49,11 @@ namespace Client_app.Controllers
             EnsureTableExists();
         }
 
-        private void EnsureTableExists()
+        private async void EnsureTableExists()
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                conn.Open();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmd = new NpgsqlCommand(@"
                     CREATE TABLE IF NOT EXISTS AcademicSections (
                         id SERIAL PRIMARY KEY,
@@ -97,7 +96,7 @@ namespace Client_app.Controllers
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_faculty_section ON facultysections(user_id, department, section, subject);
                 ", conn);
-                cmd.ExecuteNonQuery();
+                await cmd.ExecuteNonQueryAsync();
             }
             catch { /* Ignore */ }
         }
@@ -167,6 +166,7 @@ namespace Client_app.Controllers
             var normalized = (role ?? "student").Trim().ToLowerInvariant().Replace(" ", "_").Replace("-", "_");
             return normalized switch
             {
+                "systemadmin" or "system_admin" or "systemadministrator" or "system_administrator" => "system_admin",
                 "dept_admin" or "deptadmin" or "departmentadmin" or "department" or "admin" or "departmentmsp" or "chairperson" => "department_admin",
                 "facultymsp" => "faculty",
                 "registrarmsp" => "registrar",
@@ -186,7 +186,7 @@ namespace Client_app.Controllers
             {
                 var normalizedEmail = request.Email.Trim().ToLower();
 
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using (var checkCmd = new NpgsqlCommand("SELECT COUNT(1) FROM Users WHERE email = @email", conn))
@@ -230,6 +230,15 @@ namespace Client_app.Controllers
             request.Role = NormalizeSystemRole(request.Role);
             var inputCode = request.VerificationCode?.Trim();
 
+            if (request.Role == "system_admin")
+            {
+                return BadRequest(new
+                {
+                    status = "Error",
+                    message = "System administrator accounts can only be provisioned through the secured deployment bootstrap."
+                });
+            }
+
             // 1. Verify Code
             if (!_cache.TryGetValue($"verification_{normalizedEmail}", out string? cachedCode) || cachedCode != inputCode)
             {
@@ -239,7 +248,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 // Check if user already exists before proceeding
@@ -313,9 +322,9 @@ namespace Client_app.Controllers
 
                 using var cmdProfile = new NpgsqlCommand(profileQuery, conn, transaction);
                 cmdProfile.Parameters.AddWithValue("uid", userId);
-                cmdProfile.Parameters.AddWithValue("name", request.FullName);
+                cmdProfile.Parameters.AddWithValue("name", (object?)request.FullName ?? DBNull.Value);
                 cmdProfile.Parameters.AddWithValue("dept", (object?)request.Department ?? DBNull.Value);
-                cmdProfile.Parameters.AddWithValue("role", request.Role ?? "");
+                cmdProfile.Parameters.AddWithValue("role", (object?)request.Role ?? DBNull.Value);
                 cmdProfile.Parameters.AddWithValue("facultyType", request.Role?.ToLower() == "faculty" ? (object?)(request.FacultyType ?? "full-time") : DBNull.Value);
                 
                 if (request.Role?.ToLower() == "student") 
@@ -369,7 +378,7 @@ namespace Client_app.Controllers
                 return Ok(cachedData);
             }
 
-            using var conn = new NpgsqlConnection(_connectionString);
+            await using var conn = await _dataSource.OpenConnectionAsync();
             await conn.OpenAsync();
 
             var studentRequests = new List<object>();
@@ -431,7 +440,7 @@ namespace Client_app.Controllers
         [HttpPut("requests/approve/{type}/{id}")]
         public async Task<IActionResult> ApproveRequest(string type, int id)
         {
-            using var conn = new NpgsqlConnection(_connectionString);
+            await using var conn = await _dataSource.OpenConnectionAsync();
             await conn.OpenAsync();
             using var transaction = await conn.BeginTransactionAsync();
 
@@ -491,7 +500,7 @@ namespace Client_app.Controllers
         [HttpDelete("requests/deny/{id}")]
         public async Task<IActionResult> DenyRequest(int id)
         {
-            using var conn = new NpgsqlConnection(_connectionString);
+            await using var conn = await _dataSource.OpenConnectionAsync();
             await conn.OpenAsync();
 
             using var findCmd = new NpgsqlCommand("SELECT email, role FROM Users WHERE id = @id AND status = 'pending'", conn);
@@ -531,7 +540,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
                 
                 using var cmd = new NpgsqlCommand("DELETE FROM Users WHERE status = 'pending' AND created_at < NOW() - INTERVAL '30 days'", conn);
@@ -558,7 +567,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 var students = new List<object>();
@@ -600,7 +609,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 string userEmail = "", userName = "Student";
@@ -644,7 +653,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using var findCmd = new NpgsqlCommand("SELECT email, role FROM Users WHERE id = @id AND role = 'student'", conn);
@@ -716,7 +725,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 var admins = new List<object>();
@@ -757,7 +766,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 string userEmail = "", userName = "Admin";
@@ -802,7 +811,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using var findCmd = new NpgsqlCommand(@"
@@ -886,7 +895,7 @@ namespace Client_app.Controllers
                     return Ok(cachedData);
                 }
 
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 var faculties = new List<object>();
@@ -932,7 +941,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 string userEmail = "", userName = "Faculty";
@@ -997,7 +1006,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using var findCmd = new NpgsqlCommand("SELECT email, role FROM Users WHERE id = @id AND role = 'faculty'", conn);
@@ -1090,7 +1099,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using var cmdAdmin = new NpgsqlCommand("SELECT department FROM AdminProfiles ap JOIN Users u ON ap.user_id = u.id WHERE u.email = @email", conn);
@@ -1135,7 +1144,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 var sections = new List<object>();
@@ -1172,7 +1181,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using var cmd = new NpgsqlCommand(@"
@@ -1203,7 +1212,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 // Fetch all approved students matching ANY of the faculty's assigned sections across multiple departments
@@ -1257,7 +1266,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 // Fetch user info for email notification
@@ -1443,8 +1452,7 @@ namespace Client_app.Controllers
                 httpClient.DefaultRequestHeaders.Add("x-api-key", apiKey);
                 var middlewareUrl = _configuration["Middleware:Url"] ?? _configuration["MIDDLEWARE_URL"] ?? "http://127.0.0.1:4000";
 
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 for (int index = 0; index < parsedRecords.Count; index++)
                 {
@@ -1809,9 +1817,15 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 var normalizedRole = NormalizeSystemRole(role);
+
+                if (normalizedRole == "system_admin"
+                    && (User.Identity?.IsAuthenticated != true
+                        || !string.Equals(User.Identity.Name, email, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return Forbid();
+                }
 
                 string query = "";
                 NpgsqlCommand cmd;
@@ -1869,7 +1883,7 @@ namespace Client_app.Controllers
                         };
                     }
                 }
-                else if (normalizedRole == "registrar" || normalizedRole == "department_admin") 
+                else if (normalizedRole == "registrar" || normalizedRole == "department_admin" || normalizedRole == "system_admin")
                 {
                     query = baseQuery + "ap.full_name, ap.department FROM Users u JOIN AdminProfiles ap ON u.id = ap.user_id WHERE u.email = @email";
                     cmd = new NpgsqlCommand(query, conn);
@@ -2025,8 +2039,7 @@ namespace Client_app.Controllers
                 int skippedCount = 0;
                 var errors = new List<object>();
 
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var createdFaculties = new HashSet<string>();
                 var createdStudents = new HashSet<string>();
@@ -2232,7 +2245,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using var transaction = await conn.BeginTransactionAsync();
@@ -2287,7 +2300,7 @@ namespace Client_app.Controllers
             try
             {
                 var sections = new List<object>();
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
 
                 using var cmd = new NpgsqlCommand("SELECT id, department, year_level, section_num FROM AcademicSections WHERE department = @dept ORDER BY year_level, section_num", conn);
@@ -2325,8 +2338,7 @@ namespace Client_app.Controllers
             {
                 string department = "", yearLevel = "", sectionNum = "";
 
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 using (var cmdSec = new NpgsqlCommand("SELECT department, year_level, section_num FROM AcademicSections WHERE id = @id", conn))
                 {
@@ -2393,8 +2405,7 @@ namespace Client_app.Controllers
                     httpClient.DefaultRequestHeaders.Add("x-api-key", apiKey);
                     var middlewareUrl = _configuration["Middleware:Url"] ?? _configuration["MIDDLEWARE_URL"] ?? "http://127.0.0.1:4000";
 
-                    foreach (var record in parsedRecords)
-                    {
+                    foreach (var record in parsedRecords)                    {
                         string GetVal(params string[] keys)
                         {
                             foreach (var k in keys) if (record.TryGetValue(k, out var val) && !string.IsNullOrWhiteSpace(val)) return val;
@@ -2493,7 +2504,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
                 
                 string dept = "", year = "", secNum = "";
@@ -2535,7 +2546,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await conn.OpenAsync();
                 using var tx = await conn.BeginTransactionAsync();
 
@@ -2600,8 +2611,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureSharedClientStateTableAsync(conn);
 
                 using var cmd = new NpgsqlCommand("SELECT value::text, updated_at FROM shared_client_state WHERE key = @key", conn);
@@ -2636,8 +2646,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureSharedClientStateTableAsync(conn);
 
                 var valueJson = request.Value.GetRawText();

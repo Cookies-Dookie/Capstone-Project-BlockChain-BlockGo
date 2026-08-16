@@ -13,11 +13,11 @@ namespace Client_app.Controllers
     [Route("api/[controller]")]
     public class RegistrarDashboardController : ControllerBase
     {
-        private readonly string _connectionString;
+        private readonly NpgsqlDataSource _dataSource;
 
-        public RegistrarDashboardController(IConfiguration configuration)
+        public RegistrarDashboardController(NpgsqlDataSource dataSource)
         {
-            _connectionString = configuration.GetConnectionString("PostgresConnection") ?? configuration.GetConnectionString("MasterConnection") ?? throw new InvalidOperationException("PostgreSQL connection string not found.");
+            _dataSource = dataSource;
         }
 
         [HttpGet("overview")]
@@ -25,8 +25,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var deptStats = new List<object>();
 
@@ -65,8 +64,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var logs = new List<object>();
                 var fromDate = from ?? DateTime.UtcNow.AddDays(-30);

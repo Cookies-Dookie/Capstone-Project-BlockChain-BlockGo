@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { fetchAllGrades, approveGrade, finalizeGrade, returnGrade, batchUploadGrades, fetchFacultySections, fetchFacultyStudents, createSection, fetchDepartmentSections, batchEnrollStudentsToSection, dropStudent, fetchApprovedFaculties, unassignFacultySection, getDecryptedIpfsUrl, getSystemSetting, issueGrade, bulkUploadMasterlist, deleteAcademicSection, deleteDepartmentAcademicSections } from '../../services/api';
+import { fetchAllGrades, approveGrade, finalizeGrade, returnGrade, batchUploadGrades, fetchFacultySections, fetchFacultyStudents, fetchDepartmentSections, batchEnrollStudentsToSection, dropStudent, fetchApprovedFaculties, unassignFacultySection, openDecryptedIpfsFile, getSystemSetting, issueGrade } from '../../services/api';
 import { useNotification } from '../../services/NotificationContext';
 import ChairpersonHeader from './ChairpersonHeader';
 import ChairpersonSidebar from './ChairpersonSidebar';
@@ -478,29 +478,8 @@ const getDepartmentSectionSnapshot = (department = '') => {
     }
 };
 
-const HoverableID = ({ fullId, isAuthorized }) => {
-    const [isRevealed, setIsRevealed] = useState(false);
-    const displayValue = fullId || 'Unknown';
-    const isShort = displayValue.length <= 12;
-    const maxWidthClass = (isRevealed && isAuthorized) || isShort ? 'max-w-[350px]' : 'max-w-[90px]';
-
-    return (
-        <span 
-            onMouseEnter={() => setIsRevealed(true)}
-            onMouseLeave={() => setIsRevealed(false)}
-            onClick={() => setIsRevealed(!isRevealed)}
-            className={`inline-block truncate align-bottom transition-[max-width] duration-300 ease-in-out ${isAuthorized ? 'cursor-pointer' : 'cursor-default'} ${maxWidthClass}`}
-            title={displayValue}
-        >
-            {displayValue}
-        </span>
-    );
-};
-
 const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole = '', department = '' }) => {
     const [grades, setGrades] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [errorMsg, setErrorMsg] = useState(null); 
     
     const { addNotification } = useNotification();
     const [mainTab, setMainTab] = useState('grades'); 
@@ -512,15 +491,9 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
     const [selectedMySection, setSelectedMySection] = useState(null);
 
     const [academicSections, setAcademicSections] = useState([]);
-    const [newSectionData, setNewSectionData] = useState({ yearLevel: '', sectionNum: '', subjectCode: '' });
     const [enrollFile, setEnrollFile] = useState(null);
-    const [enrollSectionId, setEnrollSectionId] = useState('');
-    const [isCreatingSection, setIsCreatingSection] = useState(false);
     const [isEnrolling, setIsEnrolling] = useState(false);
-    const [assignToFaculty, setAssignToFaculty] = useState('self');
     const [departmentFaculties, setDepartmentFaculties] = useState([]);
-    const [masterlistFile, setMasterlistFile] = useState(null);
-    const [isUploadingMasterlist, setIsUploadingMasterlist] = useState(false);
     const [classGrades, setClassGrades] = useState({});
     const [classValidationErrors, setClassValidationErrors] = useState({});
     const [isSavingGrades, setIsSavingGrades] = useState(false);
@@ -991,15 +964,13 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
         }
     }, [facultyRows, grades, selectedReviewSection]);
 
-    const loadGrades = useCallback(async (isBackground = false) => {
-        if (!isBackground) setLoading(true);
+    const loadGrades = useCallback(async () => {
         try {
             const response = await fetchAllGrades(loggedInEmail);
             setGrades(Array.isArray(response) ? response : (response.data || []));
         } catch (error) {
-            if (!isBackground) setErrorMsg(`Could not fetch blockchain data: ${error.message}`);
+            console.error(`Could not fetch blockchain data: ${error.message}`);
         }
-        if (!isBackground) setLoading(false);
     }, [loggedInEmail]);
 
     useEffect(() => { loadGrades(); }, [loadGrades]);
@@ -1097,7 +1068,7 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
                 }
             }
 
-            loadGrades(true);
+            loadGrades();
             loadMyClasses();
             loadAcademicSections();
             loadDepartmentFaculties();
@@ -1204,18 +1175,6 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
             }
             return { ...prev, [studentId]: updated };
         });
-    };
-
-    const handleDownloadMasterlistTemplate = () => {
-        const csvContent = "Student No,Last Name,First Name,MI,Sex,Year Level,Section,Subject Code,Faculty Name,Faculty Email\n23-0001,Dela Cruz,Juan,A,Male,3,1,IT-101,Prof. Smith,smith@plv.edu.ph\n";
-        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", `Masterlist_Template_${department}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
     };
 
     const handleBulkApprove = async () => {
@@ -1428,64 +1387,6 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
         link.click();
     };
 
-    const handleCreateSection = async (e) => {
-        e.preventDefault();
-        if (!newSectionData.yearLevel || !newSectionData.sectionNum || !department) {
-            addNotification('Year Level and Section Number are required.', 'error');
-            return;
-        }
-        setIsCreatingSection(true);
-        try {
-            let assignEmail = null;
-            if (assignToFaculty === 'self') assignEmail = loggedInEmail;
-            else if (assignToFaculty !== 'none') assignEmail = assignToFaculty;
-
-            const payload = { ...newSectionData, department, assignToEmail: assignEmail, subject: newSectionData.subjectCode };
-            const res = await createSection(payload);
-            if (res.status === 'Success') {
-                addNotification(`Section ${department} ${newSectionData.yearLevel}-${newSectionData.sectionNum} (${newSectionData.subjectCode}) created successfully!`, 'success');
-                
-                if (res.id) {
-                    setEnrollSectionId(res.id.toString());
-                }
-                
-                setNewSectionData({ yearLevel: '', sectionNum: '', subjectCode: '' });
-                if (assignEmail === loggedInEmail) loadMyClasses(); // Instantly refresh the "My Classes" tab
-                loadAcademicSections(); // Refresh the list
-            } else {
-                addNotification(res.message || 'Failed to create section.', 'error');
-            }
-        } catch (err) {
-            addNotification(err.message, 'error');
-        }
-        setIsCreatingSection(false);
-    };
-
-    const handleBulkEnroll = async () => {
-        if (!enrollFile || !enrollSectionId) {
-            addNotification('Please select a section and a file to upload.', 'error');
-            return;
-        }
-        setIsEnrolling(true);
-        try {
-            const res = await batchEnrollStudentsToSection(enrollFile, enrollSectionId);
-            if (res.status === 'Success') {
-                addNotification(res.message || 'Students enrolled successfully!', 'success');
-                setEnrollFile(null);
-                setEnrollSectionId('');
-                const fileInput = document.getElementById('student-enroll-upload');
-                if (fileInput) fileInput.value = '';
-                loadAcademicSections();
-                loadMyClasses();
-            } else {
-                addNotification(res.message || 'Enrollment failed.', 'error');
-            }
-        } catch (err) {
-            addNotification(err.message, 'error');
-        }
-        setIsEnrolling(false);
-    };
-
     const handleBulkEnrollMyClass = async () => {
         if (!enrollFile || !selectedMySection) return;
         
@@ -1516,31 +1417,6 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
             addNotification(err.message, 'error');
         }
         setIsEnrolling(false);
-    };
-
-    const handleMasterlistUpload = async () => {
-        if (!masterlistFile) {
-            addNotification('Please select a CSV or Excel file to upload.', 'error');
-            return;
-        }
-        setIsUploadingMasterlist(true);
-        try {
-            const data = await bulkUploadMasterlist(masterlistFile, department);
-            if (data.status === 'Success' || data.status === 'Partial Success') {
-                addNotification(data.message || 'Masterlist processed successfully. Accounts and sections created.', 'success');
-                setMasterlistFile(null);
-                const fileInput = document.getElementById('masterlist-upload');
-                if (fileInput) fileInput.value = '';
-                loadMyClasses();
-                loadAcademicSections();
-                    loadDepartmentFaculties();
-            } else {
-                addNotification(data.message || 'Masterlist upload failed.', 'error');
-            }
-        } catch (err) {
-            addNotification(err.message, 'error');
-        }
-        setIsUploadingMasterlist(false);
     };
 
     const handleUnassignSection = async () => {
@@ -1588,48 +1464,19 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
         setIpfsModalOpen(true);
     };
 
-    const submitIpfsPassword = () => {
+    const submitIpfsPassword = async () => {
         if (vaultPassword) {
-            const url = getDecryptedIpfsUrl(ipfsCid, vaultPassword);
-            window.open(url, "_blank");
-            setIpfsModalOpen(false);
+            const viewerWindow = window.open('', "_blank");
+            try {
+                await openDecryptedIpfsFile(ipfsCid, vaultPassword, viewerWindow);
+                setIpfsModalOpen(false);
+            } catch (error) {
+                if (viewerWindow) viewerWindow.close();
+                addNotification(error.message, "error");
+            }
         } else {
             addNotification("Vault Password is required", "error");
         }
-    };
-
-    const handleDeleteSection = async (id, sectionName) => {
-        setConfirmModal({
-            isOpen: true,
-            title: "Delete Section",
-            message: `Are you sure you want to delete Section ${sectionName}? This will also remove the faculty assignment for this section.`,
-            onConfirm: async () => {
-                try {
-                    await deleteAcademicSection(id);
-                    addNotification(`Section ${sectionName} deleted successfully.`, "success");
-                    loadAcademicSections();
-                    loadMyClasses();
-                } catch (e) { addNotification(e.message, "error"); }
-                setConfirmModal({ isOpen: false, title: "", message: "", onConfirm: null });
-            }
-        });
-    };
-
-    const handleDeleteAllSections = async () => {
-        setConfirmModal({
-            isOpen: true,
-            title: "Clear All Sections",
-            message: `Are you sure you want to delete ALL academic sections for ${department}? This is typically done at the end of the school year.`,
-            onConfirm: async () => {
-                try {
-                    await deleteDepartmentAcademicSections(department);
-                    addNotification(`All sections for ${department} cleared.`, "success");
-                    loadAcademicSections();
-                    loadMyClasses();
-                } catch (e) { addNotification(e.message, "error"); }
-                setConfirmModal({ isOpen: false, title: "", message: "", onConfirm: null });
-            }
-        });
     };
 
     const activeChairTab = mainTab;

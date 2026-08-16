@@ -20,15 +20,15 @@ namespace Client_app.Controllers
         private readonly IChatCache _chatCache;
         private readonly IChatMessageEncryption _encryption;
         private readonly ILogger<ChatHub> _logger;
-        private readonly string _connectionString;
+        private readonly NpgsqlDataSource _dataSource;
         private static readonly TimeSpan DatabaseHistoryDuration = TimeSpan.FromDays(30);
 
-        public ChatHub(IChatCache chatCache, IChatMessageEncryption encryption, IConfiguration configuration, ILogger<ChatHub> logger)
+        public ChatHub(IChatCache chatCache, IChatMessageEncryption encryption, NpgsqlDataSource dataSource, ILogger<ChatHub> logger)
         {
             _chatCache = chatCache;
             _encryption = encryption;
             _logger = logger;
-            _connectionString = configuration.GetConnectionString("PostgresConnection") ?? configuration.GetConnectionString("MasterConnection") ?? throw new InvalidOperationException("PostgreSQL connection string not found.");
+            _dataSource = dataSource;
         }
 
         public async Task JoinChat(string role)
@@ -206,8 +206,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureChatSchemaAsync(conn);
 
                 using var cmd = new NpgsqlCommand(@"
@@ -306,8 +305,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureChatSchemaAsync(conn);
 
                 using var cmd = new NpgsqlCommand(@"
@@ -333,8 +331,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureChatSchemaAsync(conn);
 
                 using var cmd = new NpgsqlCommand(@"
@@ -385,8 +382,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureChatSchemaAsync(conn);
 
                 using var cmd = new NpgsqlCommand(@"
@@ -479,8 +475,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureChatSchemaAsync(conn);
 
                 using var cmd = new NpgsqlCommand(@"
@@ -559,8 +554,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 await EnsureChatSchemaAsync(conn);
 
                 using var cmd = new NpgsqlCommand(@"
@@ -639,8 +633,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmd = new NpgsqlCommand("SELECT role FROM users WHERE LOWER(email) = LOWER(@email) AND LOWER(status) = 'approved' LIMIT 1;", conn);
                 cmd.Parameters.AddWithValue("email", email);
                 return (await cmd.ExecuteScalarAsync())?.ToString() ?? string.Empty;

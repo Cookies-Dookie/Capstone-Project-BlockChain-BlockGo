@@ -6,8 +6,10 @@ using Client_app.Services;
 using Client_app.Middleware;
 using Client_app.Models;
 using Client_app.Controllers;
+using Microsoft.Extensions.DependencyInjection;
 using For_Testing_Only_Capstone.Models;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Npgsql;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
@@ -105,6 +107,9 @@ try
 
     builder.Configuration.AddInMemoryCollection(configOverrides);
 
+    // Connection pooling is managed by EF Core
+    // var finalConnectionString = builder.Configuration.GetConnectionString("PostgresConnection") ?? throw new InvalidOperationException("PostgreSQL connection string 'PostgresConnection' not found.");
+
     builder.Services.AddCors(options =>
     {
         options.AddPolicy("AllowFrontend", policy =>
@@ -141,8 +146,7 @@ try
     builder.Services.AddProblemDetails();
 
     var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET") ?? throw new InvalidOperationException("JWT_SECRET environment variable is required.");
-    jwtSecret = jwtSecret.Trim().PadRight(32, '0').Substring(0, 32);
-    var jwtKey = Encoding.UTF8.GetBytes(jwtSecret);
+    var jwtKey = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(jwtSecret.Trim()));
 
     builder.Services.AddAuthorization();
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -251,6 +255,19 @@ try
         options.UseNpgsql(connectionString, npgsqlOptions => npgsqlOptions.CommandTimeout((int)TimeSpan.FromMinutes(5).TotalSeconds));
     });
 
+    builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
+    {
+        var connectionString = builder.Configuration.GetConnectionString("MasterConnection")
+            ?? builder.Configuration.GetConnectionString("PostgresConnection");
+
+        if (string.IsNullOrEmpty(connectionString))
+        {
+            throw new InvalidOperationException("PostgreSQL connection string 'MasterConnection' or 'PostgresConnection' not found in configuration.");
+        }
+
+        return new NpgsqlDataSourceBuilder(connectionString).Build();
+    });
+
     builder.Services.AddScoped<RegistrarDbContext>(provider => provider.GetRequiredService<RegistrarWriteDbContext>());
 
     builder.Services.AddSingleton<IChatCache, ChatCache>(); 
@@ -272,6 +289,28 @@ try
     }
 
     app.UseAuthentication();
+    app.Use(async (context, next) =>
+    {
+        if (context.User.Identity?.IsAuthenticated == true && context.User.IsInRole("system_admin"))
+        {
+            var path = context.Request.Path;
+            var monitoringRequest = path.StartsWithSegments("/api/SystemMonitoring");
+            var ownProfileRequest = path.Equals(new PathString("/api/Auth/user-profile"));
+
+            if (!monitoringRequest && !ownProfileRequest)
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    status = "Error",
+                    message = "System administrator access is limited to operational monitoring."
+                });
+                return;
+            }
+        }
+
+        await next();
+    });
     app.UseAuthorization();
     app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "blockgo-backend" }));
     app.MapGet("/api/backend/health", () => Results.Ok(new { status = "healthy", service = "blockgo-backend" }));

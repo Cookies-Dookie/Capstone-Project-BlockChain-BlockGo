@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { uploadToIpfs, getDecryptedIpfsUrl } from "../../services/api";
+import { uploadToIpfs, openDecryptedIpfsFile } from "../../services/api";
 import Modal from "../../services/Modal";
 import { downloadTemplateButtonClass } from "../shared/downloadButtonStyles";
 const programs = [
@@ -87,11 +87,16 @@ function StudentListImport() {
       setIpfsModalOpen(true);
   };
 
-  const submitIpfsPassword = () => {
+  const submitIpfsPassword = async () => {
       if (vaultPassword) {
-          const url = getDecryptedIpfsUrl(ipfsCid, vaultPassword);
-      window.open(url, "_blank");
-          setIpfsModalOpen(false);
+          const viewerWindow = window.open('', "_blank");
+          try {
+              await openDecryptedIpfsFile(ipfsCid, vaultPassword, viewerWindow);
+              setIpfsModalOpen(false);
+          } catch (error) {
+              if (viewerWindow) viewerWindow.close();
+              alert(error.message);
+          }
       } else {
           alert("Vault Password is required");
       }

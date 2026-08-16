@@ -164,7 +164,7 @@ function RegistrarStudentSectioning({
     const saved = localStorage.getItem(STUDENT_BATCHES_KEY);
     return saved ? JSON.parse(saved) : [];
   });
-  const [activeWorkspace, setActiveWorkspace] = useState("sectioning");
+  const [activeWorkspace] = useState("sectioning");
   const [selectedBatchKey, setSelectedBatchKey] = useState("");
   const [sectioningBatchYear, setSectioningBatchYear] = useState(() =>
     String(new Date().getFullYear())
@@ -2550,6 +2550,14 @@ function RegistrarStudentSectioning({
                   className="rounded-xl bg-[#003366] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#00264d]"
                 >
                   Generate Sections
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShuffleSections}
+                  disabled={!selectedBatch || yearSectionPlans.length < 2}
+                  className="rounded-xl border border-[#003366] px-5 py-3 text-sm font-semibold text-[#003366] transition hover:bg-[#003366] hover:text-white disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+                >
+                  Shuffle Students
                 </button>
                 <button
                   type="button"

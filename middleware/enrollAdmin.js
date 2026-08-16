@@ -193,10 +193,11 @@ async function bootstrapRootUser(wallet) {
                             enrollmentID: email,
                             enrollmentSecret: pass,
                             role: 'admin',
+                            maxEnrollments: -1,
                             attrs: [{ name: 'role', value: 'registrar', ecert: true }]
                         }, adminUser);
                     } catch (e) {
-                        await identityService.update(email, { type: 'admin', secret: pass, max_enrollments: -1, attrs: [{ name: 'role', value: 'registrar', ecert: true }] }, adminUser);
+                        await identityService.update(email, { type: 'admin', enrollmentSecret: pass, maxEnrollments: -1, attrs: [{ name: 'role', value: 'registrar', ecert: true }] }, adminUser);
                     }
                 } else {
                     throw regErr;

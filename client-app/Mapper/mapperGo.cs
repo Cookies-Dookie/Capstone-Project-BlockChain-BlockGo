@@ -8,7 +8,7 @@ namespace BlockGo.Mappers
     {
         public static AcademicRecord ToBlockchainRecord(this GradeRequest request, string university = "PLV")
         {
-            string uniqueRecordId = Guid.NewGuid().ToString(); // Use a unique ID for each record
+            string uniqueRecordId = Guid.NewGuid().ToString();
             return new AcademicRecord
             {
                 Id = uniqueRecordId, 

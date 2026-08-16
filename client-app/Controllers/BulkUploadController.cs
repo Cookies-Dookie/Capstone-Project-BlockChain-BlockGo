@@ -26,13 +26,13 @@ namespace BlockGo.Controllers
     {
         private readonly ILogger<BulkUploadController> _logger;
         private readonly IBlockchainService _blockchainService;
-        private readonly string _connectionString;
+        private readonly NpgsqlDataSource _dataSource;
 
-        public BulkUploadController(ILogger<BulkUploadController> logger, IBlockchainService blockchainService, IConfiguration configuration)
+        public BulkUploadController(ILogger<BulkUploadController> logger, IBlockchainService blockchainService, NpgsqlDataSource dataSource)
         {
             _logger = logger;
             _blockchainService = blockchainService;
-            _connectionString = configuration.GetConnectionString("MasterConnection") ?? configuration.GetConnectionString("DefaultConnection") ?? "";
+            _dataSource = dataSource;
         }
 
         private string HashIdentifier(string input)
@@ -119,8 +119,7 @@ namespace BlockGo.Controllers
                     using (var fileStream = new FileStream(tempFile, FileMode.Create))
                         await file.CopyToAsync(fileStream);
 
-                    using var conn = new NpgsqlConnection(_connectionString);
-                    await conn.OpenAsync();
+                    await using var conn = await _dataSource.OpenConnectionAsync();
                     int count = 0;
 
                     if (ext == ".csv") {
@@ -245,10 +244,8 @@ namespace BlockGo.Controllers
         [Authorize(Roles = "department_admin,chairperson")]
         public async Task<IActionResult> ApproveGradesForDept([FromBody] ApproveGradesRequest request)
         {
-            try
-            {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+            try            {
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 int approvedCount = 0;
 
                 foreach (var stagingId in request.StagingIds ?? new List<int>())
@@ -275,8 +272,7 @@ namespace BlockGo.Controllers
             var registrarEmail = User.Identity?.Name;
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 int finalizedCount = 0;
 
                 foreach (var stagingId in request.StagingIds ?? new List<int>())
@@ -334,10 +330,8 @@ namespace BlockGo.Controllers
         [HttpGet("staged")]
         public async Task<IActionResult> GetStagedGrades([FromQuery] string? status)
         {
-            try
-            {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+            try            {
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 var query = "SELECT * FROM bulk_grade_staging";
                 if (!string.IsNullOrEmpty(status)) query += " WHERE status = @status";
                 

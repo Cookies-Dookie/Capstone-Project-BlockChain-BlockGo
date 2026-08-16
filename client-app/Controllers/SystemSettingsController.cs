@@ -14,30 +14,29 @@ namespace Client_app.Controllers
     [Route("api/[controller]")]
     public class SystemSettingsController : ControllerBase
     {
-        private readonly string _connectionString;
+        private readonly NpgsqlDataSource _dataSource;
         private readonly ILogger<SystemSettingsController> _logger;
         private readonly IHubContext<ChatHub> _chatHubContext;
 
-        public SystemSettingsController(IConfiguration configuration, ILogger<SystemSettingsController> logger, IHubContext<ChatHub> chatHubContext)
+        public SystemSettingsController(NpgsqlDataSource dataSource, ILogger<SystemSettingsController> logger, IHubContext<ChatHub> chatHubContext)
         {
-            _connectionString = configuration.GetConnectionString("PostgresConnection") ?? configuration.GetConnectionString("MasterConnection") ?? throw new InvalidOperationException("PostgreSQL connection string not found.");
+            _dataSource = dataSource;
             _logger = logger;
             _chatHubContext = chatHubContext;
             EnsureTableExists();
         }
 
-        private void EnsureTableExists()
+        private async void EnsureTableExists()
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                conn.Open();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmd = new NpgsqlCommand(@"
                     CREATE TABLE IF NOT EXISTS SystemSettings (
                         key VARCHAR(255) PRIMARY KEY,
                         value TEXT NOT NULL
                     );", conn);
-                cmd.ExecuteNonQuery();
+                await cmd.ExecuteNonQueryAsync();
             }
             catch { /* Ignore */ }
         }
@@ -53,8 +52,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmd = new NpgsqlCommand("SELECT value FROM SystemSettings WHERE key = @k", conn);
                 cmd.Parameters.AddWithValue("k", key);
                 var value = await cmd.ExecuteScalarAsync();
@@ -76,8 +74,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmd = new NpgsqlCommand(@"
                     INSERT INTO SystemSettings (key, value) VALUES (@k, @v) 
                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", conn);
@@ -104,8 +101,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var tx = await conn.BeginTransactionAsync();
 
                 using var cmdClearGrades = new NpgsqlCommand("DELETE FROM pending_grade_records", conn, tx);

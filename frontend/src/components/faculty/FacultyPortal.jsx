@@ -1,5 +1,4 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import plvlogo from '../../assets/plvlogo.png';
 import { fetchFacultySections, fetchFacultyStudents, fetchAllGrades, batchUploadGrades, getSystemSetting, issueGrade, submitSectionGrades } from '../../services/api';
 import Modal from '../../services/Modal';
 import FacultyHeader from './FacultyHeader';
@@ -51,12 +50,6 @@ const buildFacultyAssignmentLookupKey = ({
   ].join("|");
 
 const STUDENT_STATUS_ACTIVE = "active";
-const NON_ACTIVE_STATUSES = [
-  "dropped",
-  "unofficially_dropped",
-  "withdrawn",
-  "incomplete",
-];
 const RETURNED_SECTION_STATUSES = ["returned", "rejected"];
 const LOCKED_SECTION_STATUSES = ["submitted", "approved", "forwarded", "finalized"];
 const KNOWN_SECTION_STATUSES = [
@@ -207,11 +200,6 @@ const computeFinalAverage = (student = {}) => {
   return (mid + fin) / 2;
 };
 
-const formatFinalAverage = (student = {}) => {
-  const finalAverage = computeFinalAverage(student);
-  return finalAverage === null ? "-" : finalAverage.toFixed(2);
-};
-
 const getAcademicStatus = (student = {}) => {
   const finalAverage = computeFinalAverage(student);
   if (finalAverage === null) return "-";
@@ -242,8 +230,6 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
   const [sectionStatus, setSectionStatus] = useState({});
   const [validationErrors, setValidationErrors] = useState({});
   
-  const [editingTemplate, setEditingTemplate] = useState(null);
-  const [templateColumns, setTemplateColumns] = useState({});
   const [uploadingSection, setUploadingSection] = useState(null);
   const [uploadResult, setUploadResult] = useState(null);
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -893,7 +879,6 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
   const daysLeft       = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
   const isClosed       = !encodingStart || !encodingEnd || now < encodingStart || now > encodingEnd;
   const isUrgent       = !isClosed && daysLeft <= 3;
-  const isOpen         = !isClosed && !isUrgent;
 
   const getBannerState = () => {
     if (!encodingStart || !encodingEnd) return 'not_set';
@@ -906,14 +891,6 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
 
   const formatDate = (date) =>
     date ? date.toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric' }) : 'not set';
-
-  const tabData = ["All Sections", "1st Year", "2nd Year", "3rd Year", "4th Year"].map(label => {
-    const count = label === "All Sections"
-      ? totalSections
-      : Object.values(sections).filter(s => s.year === label).length;
-    const colors = { "All Sections": "gold", "1st Year": "blue", "2nd Year": "green", "3rd Year": "red", "4th Year": "green" };
-    return { label, count, color: colors[label], progress: totalSections > 0 ? (count / totalSections) * 100 : 0 };
-  });
 
   const calculateFinalAverage = (stu) => {
     if (!hasEncodedGrade(stu.midterm) || !hasEncodedGrade(stu.finals)) {
@@ -977,19 +954,6 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
     const updated = JSON.parse(JSON.stringify(sections));
     updated[sectionName].students[index].flagged = !updated[sectionName].students[index].flagged;
     setSections(updated);
-  }, [sections, getSectionTermStatus]);
-
-  const handleCustomGradeChange = useCallback((sectionName, index, colId, value) => {
-    if (isLockedSectionStatus(getSectionTermStatus(sectionName))) return;
-    const updated = JSON.parse(JSON.stringify(sections));
-    
-    if (!updated[sectionName].students[index].customGrades) {
-        updated[sectionName].students[index].customGrades = {};
-    }
-    updated[sectionName].students[index].customGrades[colId] = parseFloat(value) || 0;
-
-    setSections(updated);
-    setRowSaveState(prev => ({ ...prev, [sectionName]: { ...(prev[sectionName] || {}), [index]: 'idle' } }));
   }, [sections, getSectionTermStatus]);
 
   const handleExportPDFClassGrades = (sectionName) => {
@@ -1071,33 +1035,6 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
     } catch (err) {
         alert("Could not generate PDF. Make sure jsPDF is available.");
     }
-  };
-
-  const handleExportClassGrades = (sectionName) => {
-    const sectionData = sections[sectionName];
-    if (!sectionData || !sectionData.students) return;
-    
-    const headers = ["Student ID", "Student Name", "Midterm", "Finals", "Final Grade", "Grade Equivalent", "Status", "Student Status"];
-    const rows = sectionData.students.map(student => {
-        const finalGrade = calculateFinalAverage(student);
-        const status = getAcademicStatus(student);
-        return [
-            student.studentNo || student.id, 
-            `"${student.name}"`, 
-            student.midterm || "", 
-            student.finals || "", 
-            finalGrade === null ? "" : finalGrade.toFixed(2),
-            finalGrade === null ? "-" : getGradeEquivalent(finalGrade),
-            status,
-            student.standing || STUDENT_STATUS_ACTIVE,
-        ].join(",");
-    });
-    
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
-    const link = document.createElement("a");
-    link.href = encodeURI(csvContent);
-    link.setAttribute("download", `${sectionName.replace(/[^a-zA-Z0-9-]/g, "_")}_Grades.csv`);
-    link.click();
   };
 
   const handleDownloadTemporaryGradingSheet = (sectionName) => {
@@ -1182,52 +1119,6 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
     } finally {
       setUploadingSection(null);
       e.target.value = null; 
-    }
-  };
-
-  const handleSaveRow = (sectionName, index) => {
-    const errors = validationErrors[sectionName]?.[index] || {};
-    if (errors.midterm || errors.finals) return;
-    setRowSaveState(prev => ({ ...prev, [sectionName]: { ...(prev[sectionName] || {}), [index]: 'saving' } }));
-    
-    try {
-      const student = sections[sectionName].students[index];
-      const sectionData = sections[sectionName];
-      const finalAverage = calculateFinalAverage(student);
-      const resolvedStudentId = student.studentNo || student.id || "";
-      const canonicalSection = sectionData.canonicalSection || sectionName;
-      const gradePayload = {
-          student_id: resolvedStudentId,
-          student_name: student.name || [student.lastName, student.firstName].filter(Boolean).join(", "),
-          student_hash: student.email || resolvedStudentId,
-          section: canonicalSection,
-          course: sectionData.sectionCourse || sectionData.subjectCode || sectionName,
-          subject_code: sectionData.subjectCode,
-          subject_name: sectionData.subjectTitle || sectionData.subjectCode,
-          year_level: sectionData.year || "",
-          grade: JSON.stringify({
-            midterm: student.midterm,
-            finals: student.finals,
-            finalAverage: finalAverage === null ? "" : finalAverage.toFixed(2),
-            standing: student.standing || STUDENT_STATUS_ACTIVE,
-            flagged: !!student.flagged,
-          }),
-          semester: encodingSemester,
-          school_year: "2024",
-          faculty_id: facultyData.email,
-          date: new Date().toISOString().split('T')[0]
-      };
-      
-      issueGrade(gradePayload).then(() => {
-        setRowSaveState(prev => ({ ...prev, [sectionName]: { ...(prev[sectionName] || {}), [index]: 'saved' } }));
-      }).catch((e) => {
-        console.error(e);
-        alert("Failed to save grade: " + e.message);
-        setRowSaveState(prev => ({ ...prev, [sectionName]: { ...(prev[sectionName] || {}), [index]: 'idle' } }));
-      });
-    } catch(e) {
-      console.error(e);
-      setRowSaveState(prev => ({ ...prev, [sectionName]: { ...(prev[sectionName] || {}), [index]: 'idle' } }));
     }
   };
 
@@ -1316,19 +1207,12 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
     } catch (e) { alert("Error submitting section: " + e.message); }
   };
 
-  const handleFinalize = (sectionName) => {
-    if (window.confirm(`Finalize grades for ${sectionName}? This action cannot be undone and grades will be locked.`)) {
-      updateSectionTermStatus(sectionName, encodingTerm, 'finalized');
-    }
-  };
-
   const hasValidationErrors = (sectionName) => {
     const errs = validationErrors[sectionName] || {};
     return Object.values(errs).some(row => row.midterm || row.finals);
   };
 
   const currentStatus = activeSection ? getSectionTermStatus(activeSection) : null;
-  const isFinalized = currentStatus === 'finalized' || currentStatus === 'forwarded';
   const isSubmittedToChairperson = isLockedSectionStatus(currentStatus);
   const isBulkUploadedSection = activeSection ? !!bulkUploadedSections[activeSection] : false;
   const isGradeEncodingLocked = isSubmittedToChairperson || isBulkUploadedSection;

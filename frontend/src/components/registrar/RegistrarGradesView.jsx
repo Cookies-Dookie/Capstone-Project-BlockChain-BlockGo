@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, getDecryptedIpfsUrl, fetchStagedGrades, finalizeStagedGrades, getSystemSetting, registrarBulkEnrollStudents, registrarBulkUpdateStudents, resetEncodingSeason } from '../../services/api';
+import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, openDecryptedIpfsFile, getSystemSetting, registrarBulkEnrollStudents, registrarBulkUpdateStudents, resetEncodingSeason } from '../../services/api';
 import RegistrarHeader from './RegistrarHeader';
 import RegistrarSidebar from './RegistrarSidebar';
 import RegistrarDashboard from './RegistrarDashboard';
@@ -12,24 +12,7 @@ import RegistrarStudentSectioning from './RegistrarStudentSectioning';
 import RegistrarSectionsCreated from './RegistrarSectionsCreated';
 import { downloadTemplateButtonClass } from '../shared/downloadButtonStyles';
 import { buildCsvContent, downloadCsvFile } from '../../utils/studentSectioningHelpers';
-
-const HoverableID = ({ fullId, isAuthorized }) => {
-    const [isRevealed, setIsRevealed] = useState(false);
-    const displayValue = fullId || 'Unknown';
-    const isShort = displayValue.length <= 12;
-    const maxWidthClass = (isRevealed && isAuthorized) || isShort ? 'max-w-[350px]' : 'max-w-[90px]';
-    return (
-        <span 
-            onMouseEnter={() => setIsRevealed(true)}
-            onMouseLeave={() => setIsRevealed(false)}
-            onClick={() => setIsRevealed(!isRevealed)}
-            className={`inline-block truncate align-bottom transition-[max-width] duration-300 ease-in-out ${isAuthorized ? 'cursor-pointer' : 'cursor-default'} ${maxWidthClass}`}
-            title={displayValue}
-        >
-            {displayValue}
-        </span>
-    );
-};
+import { isDepartmentApprovedGradeStatus } from '../../utils/gradeStatus';
 
 const RegistrarGradesView = ({
     loggedInEmail = '',
@@ -38,8 +21,8 @@ const RegistrarGradesView = ({
     latestChatNotice = null,
     onOpenChat,
 }) => {
-    const systemAdminTabs = ['grades', 'Requests', 'assigning', 'bulkEnroll', 'revokeAccounts'];
-    const systemAdminMenuItems = [
+    const managementTabs = ['grades', 'Requests', 'assigning', 'bulkEnroll', 'revokeAccounts'];
+    const managementMenuItems = [
         { id: 'grades', label: 'Grades Ledger' },
         { id: 'Requests', label: 'Pending Requests' },
         { id: 'assigning', label: 'Assigning' },
@@ -47,8 +30,6 @@ const RegistrarGradesView = ({
         { id: 'revokeAccounts', label: 'Account Revocation' },
     ];
     const [grades, setGrades] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [errorMsg, setErrorMsg] = useState(null); 
     const [mainTab, setMainTab] = useState('dashboard'); 
     const [assignmentTab, setAssignmentTab] = useState('students');
     
@@ -270,15 +251,13 @@ const RegistrarGradesView = ({
         return () => window.removeEventListener('blockgo:system-setting-changed', handleSystemSettingChanged);
     }, []);
 
-    const loadGrades = useCallback(async (isBackground = false) => {
-        if (!isBackground) setLoading(true);
+    const loadGrades = useCallback(async () => {
         try {
             const response = await fetchAllGrades(loggedInEmail);
             setGrades(Array.isArray(response) ? response : (response.data || []));
         } catch (error) {
-            if (!isBackground) setErrorMsg(`Could not fetch data: ${error.message}`);
+            console.error(`Could not fetch data: ${error.message}`);
         }
-        if (!isBackground) setLoading(false);
     }, [loggedInEmail]);
 
     const loadStagedGrades = useCallback(async () => {
@@ -286,7 +265,9 @@ const RegistrarGradesView = ({
         try {
             const response = await fetchAllGrades(loggedInEmail);
             const allData = Array.isArray(response) ? response : (response.data || []);
-            const approvedGrades = allData.filter(g => g.status === 'DepartmentApproved' || g.status === 'Approved');
+            const approvedGrades = allData.filter(g =>
+                isDepartmentApprovedGradeStatus(g.status || g.Status || g.normalized_status)
+            );
             const formattedStaged = approvedGrades.map(g => ({
                 stagingId: g.id,
                 studentHash: g.student_hash || g.studentId,
@@ -356,7 +337,7 @@ const RegistrarGradesView = ({
                 })
             );
             await loadApprovedFaculties();
-            await loadGrades(true);
+            await loadGrades();
         } catch (error) {
             alert(error.message || 'Failed to reset encoding season.');
             throw error;
@@ -376,7 +357,7 @@ const RegistrarGradesView = ({
 
     useEffect(() => {
         const handleAcademicDataChanged = () => {
-            loadGrades(true);
+            loadGrades();
             loadApprovedStudents();
             loadApprovedAdmins();
             loadApprovedFaculties();
@@ -433,23 +414,6 @@ const RegistrarGradesView = ({
         } catch (error) { alert(`Failed to assign: ${error.message}`); }
     };
 
-    const handleFinalize = async (recordId) => {
-        try {
-            await finalizeGrade(recordId, loggedInEmail);
-            alert(`Record ${recordId} Successfully Finalized!`);
-            loadGrades(); 
-        } catch (error) { alert(`Failed to finalize record: ${error.message}`); }
-    };
-
-    const handleFinalizeStaged = async (stagingId) => {
-        try {
-            await finalizeGrade(stagingId, loggedInEmail);
-            alert("Grade officially committed to the ledger!");
-            loadStagedGrades();
-            loadGrades(true);
-        } catch (error) { alert(`Finalization failed: ${error.message}`); }
-    };
-
     const groupedStagedGrades = useMemo(() => {
         const groups = {};
         stagedGrades.forEach(g => {
@@ -483,7 +447,7 @@ const RegistrarGradesView = ({
             }
             alert("Section grades officially committed to the ledger!");
             loadStagedGrades();
-            loadGrades(true);
+            loadGrades();
         } catch (err) {
             alert(`Finalization failed: ${err.message}`);
         }
@@ -496,11 +460,16 @@ const RegistrarGradesView = ({
         setIpfsModalOpen(true);
     };
 
-    const submitIpfsPassword = () => {
+    const submitIpfsPassword = async () => {
         if (vaultPassword) {
-            const url = getDecryptedIpfsUrl(ipfsCid, vaultPassword);
-            window.open(url, "_blank");
-            setIpfsModalOpen(false);
+            const viewerWindow = window.open('', "_blank");
+            try {
+                await openDecryptedIpfsFile(ipfsCid, vaultPassword, viewerWindow);
+                setIpfsModalOpen(false);
+            } catch (error) {
+                if (viewerWindow) viewerWindow.close();
+                alert(error.message);
+            }
         } else {
             alert("Vault Password is required");
         }
@@ -936,7 +905,7 @@ const RegistrarGradesView = ({
     const handleBulkEnroll = () => handleStudentCsvAction('enroll');
     const handleBulkUpdateInfo = () => handleStudentCsvAction('update');
 
-    const isSystemAdministrationView = systemAdminTabs.includes(mainTab);
+    const isManagementView = managementTabs.includes(mainTab);
 
     return (
         <div className="flex h-screen w-full flex-col bg-slate-50 font-sans fixed inset-0 z-[100] overflow-auto">
@@ -948,15 +917,16 @@ const RegistrarGradesView = ({
                     chatUnreadCount={chatUnreadCount}
                     latestChatNotice={latestChatNotice}
                     onOpenChat={onOpenChat}
+                    managementDefaultTab="grades"
                 />
-                {isSystemAdministrationView && (
+                {isManagementView && (
                     <aside className="w-full max-w-[220px] self-start rounded-2xl border border-slate-200 bg-slate-100 p-4 shadow-sm lg:sticky lg:top-6">
                         <div className="mb-4 border-b border-slate-200 pb-3">
-                            <h2 className="text-lg font-bold text-[#003366]">System Management</h2>
+                            <h2 className="text-lg font-bold text-[#003366]">Academic Management</h2>
                         </div>
 
                         <nav className="flex flex-col gap-2">
-                            {systemAdminMenuItems.map((item) => {
+                            {managementMenuItems.map((item) => {
                                 const isActive = mainTab === item.id;
 
                                 return (

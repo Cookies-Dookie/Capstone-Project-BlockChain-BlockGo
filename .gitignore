@@ -30,6 +30,11 @@ temp/
 # =========================
 node_modules/
 **/node_modules/
+**/bin/
+**/obj/
+frontend/build/
+frontend/dist/
+frontend/dist-*/
 *.dll
 *.exe
 *.pdb
@@ -45,6 +50,15 @@ __pycache__/
 # =========================
 .env
 .env.*
+*.log
+*.pid
+network/.configtx-k8s.*/
+logs/
+client-app/logs/
+client-app/backend.log
+client-app/middleware.log
+frontend/frontend_build.log
+middleware/middleware.log
 *.bak
 appsettings.*.json
 .fake
@@ -67,14 +81,20 @@ docker-compose.override.yml
 fabric_deploy_*/
 network/postgres-data/
 network/ipfs/
+network/ipfs_data/
+network/fabric-ca/
+network/crypto-config-final-v2/**
+network/channel-artifacts-final/*
 
 # Dynamic Chaincode Env
 chaincode/.env
 
 # Ignore Cryptogen materials but KEEP directories
+!network/crypto-config-final-v2/
 !network/crypto-config-final-v2/.gitkeep
 
 # Ignore Artifacts but KEEP directory
+!network/channel-artifacts-final/
 !network/channel-artifacts-final/.gitkeep
 
 # Ignore Binaries but KEEP directory

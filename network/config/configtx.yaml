@@ -36,7 +36,7 @@ Organizations:
       Endorsement: { Type: Signature, Rule: "OR('FacultyMSP.peer')" }
     AnchorPeers:
       - Host: peer0.faculty.capstone.com
-        Port: 7051
+        Port: 9051
 
   - &DepartmentOrg
     Name: DepartmentMSP
@@ -49,7 +49,7 @@ Organizations:
       Endorsement: { Type: Signature, Rule: "OR('DepartmentMSP.peer')" }
     AnchorPeers:
       - Host: peer0.department.capstone.com
-        Port: 7051
+        Port: 11051
 
 Capabilities:
     Channel: &ChannelCapabilities
@@ -57,26 +57,18 @@ Capabilities:
     Orderer: &OrdererCapabilities
         V2_0: true
     Application: &ApplicationCapabilities
-        V2_0: true
-
-Channel: &ChannelDefaults
-  Policies:
-    Readers: { Type: ImplicitMeta, Rule: "ANY Readers" }
-    Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
-    Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
-  Capabilities:
-    <<: *ChannelCapabilities
+        V2_5: true
 
 Application: &ApplicationDefaults
-  Organizations:
-  Policies:
-    Readers: { Type: ImplicitMeta, Rule: "ANY Readers" }
-    Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
-    Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
-    LifecycleEndorsement: { Type: ImplicitMeta, Rule: "MAJORITY Endorsement" }
-    Endorsement: { Type: ImplicitMeta, Rule: "MAJORITY Endorsement" }
-  Capabilities:
-    <<: *ApplicationCapabilities
+    Organizations:
+    Policies:
+        Readers: { Type: ImplicitMeta, Rule: "ANY Readers" }
+        Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
+        Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
+        LifecycleEndorsement: { Type: ImplicitMeta, Rule: "MAJORITY Endorsement" }
+        Endorsement: { Type: ImplicitMeta, Rule: "MAJORITY Endorsement" }
+    Capabilities:
+        <<: *ApplicationCapabilities
 
 Orderer: &OrdererDefaults
     OrdererType: etcdraft
@@ -88,12 +80,21 @@ Orderer: &OrdererDefaults
               ServerTLSCert: /etc/hyperledger/fabric/crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/server.crt
             - Host: orderer2.capstone.com
               Port: 8050
+<<<<<<< Updated upstream
               ClientTLSCert: /etc/hyperledger/fabric/crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer2.capstone.com/tls/server.crt
               ServerTLSCert: /etc/hyperledger/fabric/crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer2.capstone.com/tls/server.crt
             - Host: orderer3.capstone.com
               Port: 9050
               ClientTLSCert: /etc/hyperledger/fabric/crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer3.capstone.com/tls/server.crt
               ServerTLSCert: /etc/hyperledger/fabric/crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer3.capstone.com/tls/server.crt
+=======
+              ClientTLSCert: ../crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer2.capstone.com/tls/server.crt
+              ServerTLSCert: ../crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer2.capstone.com/tls/server.crt
+            - Host: orderer3.capstone.com
+              Port: 9050
+              ClientTLSCert: ../crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer3.capstone.com/tls/server.crt
+              ServerTLSCert: ../crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer3.capstone.com/tls/server.crt
+>>>>>>> Stashed changes
     Addresses:
         - orderer.capstone.com:7050
         - orderer2.capstone.com:8050
@@ -109,23 +110,37 @@ Orderer: &OrdererDefaults
         Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
         Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
         BlockValidation: { Type: ImplicitMeta, Rule: "ANY Writers" }
+<<<<<<< Updated upstream
+=======
+    Capabilities:
+        <<: *OrdererCapabilities
+
+Channel: &ChannelDefaults
+    Policies:
+        Readers: { Type: ImplicitMeta, Rule: "ANY Readers" }
+        Writers: { Type: ImplicitMeta, Rule: "ANY Writers" }
+        Admins: { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
+    Capabilities:
+        <<: *ChannelCapabilities
+>>>>>>> Stashed changes
 
 Profiles:
-  UniversityGenesis:
-    <<: *ChannelDefaults
-    Orderer:
-      <<: *OrdererDefaults
-      Organizations:
-        - *OrdererOrg
-      Capabilities:
-        <<: *OrdererCapabilities
-    Consortiums:
-      UniversityConsortium:
-        Organizations:
-          - *RegistrarOrg
-          - *FacultyOrg
-          - *DepartmentOrg
+    UniversityGenesis:
+        <<: *ChannelDefaults
+        Orderer:
+            <<: *OrdererDefaults
+            Organizations:
+                - *OrdererOrg
+            Capabilities:
+                <<: *OrdererCapabilities
+        Consortiums:
+            UniversityConsortium:
+                Organizations:
+                    - *RegistrarOrg
+                    - *FacultyOrg
+                    - *DepartmentOrg
 
+<<<<<<< Updated upstream
   RegistrarChannel:
     Consortium: UniversityConsortium
     <<: *ChannelDefaults
@@ -137,3 +152,22 @@ Profiles:
         - *DepartmentOrg
     Capabilities:
         <<: *ApplicationCapabilities
+=======
+    RegistrarChannel:
+        Consortium: UniversityConsortium
+        <<: *ChannelDefaults
+        Orderer:
+            <<: *OrdererDefaults
+            Organizations:
+                - *OrdererOrg
+            Capabilities:
+                <<: *OrdererCapabilities
+        Application:
+            <<: *ApplicationDefaults
+            Organizations:
+                - *RegistrarOrg
+                - *FacultyOrg
+                - *DepartmentOrg
+            Capabilities:
+                <<: *ApplicationCapabilities
+>>>>>>> Stashed changes

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hyperledger/fabric-chaincode-go/v2/pkg/cid"
 	"github.com/hyperledger/fabric-chaincode-go/v2/shim"
@@ -36,12 +37,29 @@ type AcademicRecord struct {
 
 type SmartContract struct{}
 
+const (
+	statusIssued             = "Issued"
+	statusReturned           = "Returned"
+	statusCorrected          = "Corrected"
+	statusDepartmentApproved = "DepartmentApproved"
+	statusFinalized          = "Finalized"
+)
+
 func getSafeAttribute(stub shim.ChaincodeStubInterface, attrName string) (string, bool) {
 	val, found, err := cid.GetAttributeValue(stub, attrName)
 	if err != nil || !found {
 		return "", false
 	}
 	return val, true
+}
+
+func getTransactionDate(stub shim.ChaincodeStubInterface) string {
+	txTimestamp, err := stub.GetTxTimestamp()
+	if err != nil || txTimestamp == nil {
+		return ""
+	}
+
+	return time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos)).UTC().Format("2006-01-02")
 }
 
 func (cc *SmartContract) Init(stub shim.ChaincodeStubInterface) *pb.Response {
@@ -93,7 +111,7 @@ func (cc *SmartContract) initLedger(stub shim.ChaincodeStubInterface) *pb.Respon
 			FacultyID:   "system",
 			Date:        "2023-01-01",
 			University:  "PLV",
-			Status:      "Finalized",
+			Status:      statusFinalized,
 			Version:     1,
 		},
 	}
@@ -155,7 +173,7 @@ func (cc *SmartContract) issueGrade(stub shim.ChaincodeStubInterface, args []str
 	} else {
 		record.FacultyID = submitterID
 	}
-	record.Status = "Issued"
+	record.Status = statusIssued
 	record.Version = 1
 
 	recordJSON, err := json.Marshal(record)
@@ -192,9 +210,46 @@ func (cc *SmartContract) issueBatchGrades(stub shim.ChaincodeStubInterface, args
 		return shim.Error(fmt.Sprintf("Failed to unmarshal batch records: %v", err))
 	}
 
+	submitterID, err := cid.GetID(stub)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get client identity: %v", err))
+	}
+
+	facultyID := submitterID
+	cert, err := cid.GetX509Certificate(stub)
+	if err == nil && cert != nil {
+		facultyID = cert.Subject.CommonName
+	}
+
+	txDate := getTransactionDate(stub)
+	seen := map[string]bool{}
+	processed := 0
+
 	for _, record := range records {
 		if record.ID == "" {
 			continue
+		}
+		if seen[record.ID] {
+			return shim.Error(fmt.Sprintf("Duplicate record ID in batch: %s", record.ID))
+		}
+		seen[record.ID] = true
+		if record.Grade == "" {
+			return shim.Error(fmt.Sprintf("Grade field cannot be empty for record %s", record.ID))
+		}
+		existing, err := stub.GetState(record.ID)
+		if err != nil {
+			return shim.Error(fmt.Sprintf("Failed to read from state database for record %s: %v", record.ID, err))
+		}
+		if existing != nil {
+			return shim.Error(fmt.Sprintf("Record already exists: %s", record.ID))
+		}
+		record.FacultyID = facultyID
+		record.Status = statusIssued
+		if record.Version <= 0 {
+			record.Version = 1
+		}
+		if record.Date == "" {
+			record.Date = txDate
 		}
 		recordJSON, err := json.Marshal(record)
 		if err != nil {
@@ -203,9 +258,10 @@ func (cc *SmartContract) issueBatchGrades(stub shim.ChaincodeStubInterface, args
 		if err := stub.PutState(record.ID, recordJSON); err != nil {
 			return shim.Error(fmt.Sprintf("Failed to put state for record %s: %v", record.ID, err))
 		}
+		processed++
 	}
 
-	return shim.Success([]byte(fmt.Sprintf("Successfully processed %d records in batch", len(records))))
+	return shim.Success([]byte(fmt.Sprintf("Successfully processed %d records in batch", processed)))
 }
 
 func (cc *SmartContract) returnGrade(stub shim.ChaincodeStubInterface, args []string) *pb.Response {
@@ -228,15 +284,22 @@ func (cc *SmartContract) returnGrade(stub shim.ChaincodeStubInterface, args []st
 	}
 
 	var record AcademicRecord
-	json.Unmarshal(recordJSON, &record)
+	if err := json.Unmarshal(recordJSON, &record); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to unmarshal record: %v", err))
+	}
 
-	record.Status = "Returned"
+	record.Status = statusReturned
 	record.Note = note
-	record.Date = "2024-05-04" // Should ideally use stub timestamp or passed date
+	record.Date = getTransactionDate(stub)
 	record.Version++
 
-	updatedJSON, _ := json.Marshal(record)
-	stub.PutState(recordID, updatedJSON)
+	updatedJSON, err := json.Marshal(record)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal record: %v", err))
+	}
+	if err := stub.PutState(recordID, updatedJSON); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to update state database: %v", err))
+	}
 
 	return shim.Success(updatedJSON)
 }
@@ -301,7 +364,7 @@ func (cc *SmartContract) updateGrade(stub shim.ChaincodeStubInterface, args []st
 	// Validate against both formats to support legacy records
 	if existing.FacultyID != submitterID && existing.FacultyID != email {
 		// Allow Chairperson/Registrar to update the record IF they are just returning it for revision
-		if updated.Status == "Returned" && (role == "department_admin" || role == "deptAdmin" || role == "registrar") {
+		if updated.Status == statusReturned && (role == "department_admin" || role == "deptAdmin" || role == "registrar") {
 			// Authorized return operation
 		} else {
 			return shim.Error("Only the original professor who issued the grade can update it")
@@ -310,7 +373,7 @@ func (cc *SmartContract) updateGrade(stub shim.ChaincodeStubInterface, args []st
 
 	existing.Grade = updated.Grade
 	existing.Date = updated.Date
-	existing.Status = "Corrected"
+	existing.Status = statusCorrected
 	existing.Version++
 
 	recordJSON, _ := json.Marshal(existing)
@@ -353,7 +416,7 @@ func (cc *SmartContract) approveGrade(stub shim.ChaincodeStubInterface, args []s
 		return shim.Error(fmt.Sprintf("Failed to unmarshal record: %v", err))
 	}
 
-	record.Status = "DepartmentApproved"
+	record.Status = statusDepartmentApproved
 	updatedJSON, _ := json.Marshal(record)
 	if err := stub.PutState(args[0], updatedJSON); err != nil {
 		return shim.Error(fmt.Sprintf("Failed to update state database: %v", err))
@@ -393,7 +456,7 @@ func (cc *SmartContract) finalizeRecord(stub shim.ChaincodeStubInterface, args [
 		return shim.Error(fmt.Sprintf("Failed to unmarshal record: %v", err))
 	}
 
-	record.Status = "Finalized"
+	record.Status = statusFinalized
 	updatedJSON, _ := json.Marshal(record)
 	if err := stub.PutState(args[0], updatedJSON); err != nil {
 		return shim.Error(fmt.Sprintf("Failed to update state database: %v", err))

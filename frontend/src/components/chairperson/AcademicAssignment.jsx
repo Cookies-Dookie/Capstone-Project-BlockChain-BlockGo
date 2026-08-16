@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   AVAILABLE_YEAR_LEVELS,
   STUDENT_BATCHES_KEY,
-  downloadStudentCsvFile,
   getDefaultSectionName,
   parseCsvRows,
   parseStudentIdSpreadsheet,
@@ -244,23 +243,6 @@ function AcademicAssignment({ chairpersonDepartment = "" }) {
     setScheduleDate("");
     setScheduleDay("");
     setSelectedFile(null);
-  };
-
-  const handleDownloadSectionTemplate = () => {
-    if (!selectedSection) {
-      alert("Please choose a section first.");
-      return;
-    }
-
-    if (!selectedSectionStudents.length) {
-      alert("This section has no students yet.");
-      return;
-    }
-
-    downloadStudentCsvFile(
-      selectedSectionStudents,
-      `${selectedProgram}-${selectedSection?.schoolYear || "section"}-${selectedSectionName}.csv`
-    );
   };
 
   const handleDistributeSectionToFaculty = () => {

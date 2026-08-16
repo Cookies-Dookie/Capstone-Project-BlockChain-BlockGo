@@ -7,6 +7,7 @@ import StudentPortal from './components/student/StudentPortal';
 import FacultyPortal from './components/faculty/FacultyPortal';
 import DeptAdminGradesView from './components/chairperson/DeptAdminGradesView';
 import RegistrarGradesView from './components/registrar/RegistrarGradesView';
+import SystemAdminPortal from './components/system-admin/SystemAdminPortal';
 import Chat from './components/shared/Chat';
 import { startNginxFailoverMonitor } from './services/nginxFailover';
 
@@ -15,6 +16,9 @@ import { NotificationProvider, useNotification } from './services/NotificationCo
 
 const normalizeAppRole = (role) => {
   const normalized = String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (normalized === 'system_admin' || normalized === 'systemadmin' || normalized === 'system_administrator' || normalized === 'systemadministrator') {
+    return 'system_admin';
+  }
   if (normalized === 'dept_admin' || normalized === 'deptadmin' || normalized === 'departmentadmin' || normalized === 'department' || normalized === 'admin' || normalized === 'departmentmsp') {
     return 'department_admin';
   }
@@ -36,7 +40,7 @@ function AppContent() {
     if (token) {
       try {
         const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-        const payload = JSON.parse(atob(base64));
+        JSON.parse(atob(base64));
         handleLoginSuccess(token);
       } catch (e) {
         localStorage.removeItem('token');
@@ -73,6 +77,8 @@ function AppContent() {
           displayName = `Dept Admin ${fetchedUser.fullName}`;
         } else if (appRole === 'registrar') {
           displayName = `Registrar ${fetchedUser.fullName}`;
+        } else if (appRole === 'system_admin') {
+          displayName = fetchedUser.fullName || 'System Administrator';
         }
 
         // Set the user state with the fetched data
@@ -169,6 +175,7 @@ function AppContent() {
   }, [addNotification, user?.role]);
 
   const currentUserRole = normalizeAppRole(user?.role);
+  const canUseChat = currentUserRole !== 'system_admin';
 
   return (
     <div className="main-app-wrapper">
@@ -177,14 +184,14 @@ function AppContent() {
       ) : (
         <>
           {/* Floating Chat Button */}
-          {!isChatOpen && (
+          {canUseChat && !isChatOpen && (
             <button 
               onClick={() => setIsChatOpen(true)} 
               style={{ position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000, padding: '15px 25px', backgroundColor: '#003366', color: 'white', border: 'none', borderRadius: '30px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', fontWeight: 'bold', fontSize: '16px' }}>
               💬 Open Chat
             </button>
           )}
-          {!isChatOpen && chatUnreadTotal > 0 && (
+          {canUseChat && !isChatOpen && chatUnreadTotal > 0 && (
             <span
               style={{
                 position: 'fixed',
@@ -207,7 +214,7 @@ function AppContent() {
               {chatUnreadTotal > 9 ? '9+' : chatUnreadTotal}
             </span>
           )}
-          <Chat
+          {canUseChat && <Chat
             userEmail={user.email}
             userRole={currentUserRole}
             isOpen={isChatOpen}
@@ -216,7 +223,7 @@ function AppContent() {
             onIncomingMessage={handleIncomingMessage}
             onRegistrationRequest={handleRegistrationRequest}
             autoOpenTarget={chatAutoOpenTarget}
-          />
+          />}
 
           {currentUserRole === "student" ? (
             <StudentPortal studentData={user} onLogout={handleLogout} />
@@ -236,6 +243,8 @@ function AppContent() {
                 onOpenChat={() => setIsChatOpen(true)}
               />
             </div>
+          ) : currentUserRole === "system_admin" ? (
+            <SystemAdminPortal adminData={user} onLogout={handleLogout} />
           ) : (
             <div style={{ position: 'relative', width: '100%', minHeight: '100vh', backgroundColor: '#f0f2f5' }}>
               <div style={{ position: 'absolute', top: '15px', right: '20px', zIndex: 10 }}>

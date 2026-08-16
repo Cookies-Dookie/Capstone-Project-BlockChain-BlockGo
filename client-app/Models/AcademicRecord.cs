@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace BlockGo.Models
@@ -52,10 +53,31 @@ namespace BlockGo.Models
         [JsonPropertyName("status")]
         public string Status { get; set; } = string.Empty;
 
+        [JsonPropertyName("normalized_status")]
+        public string NormalizedStatus => NormalizeStatus(Status);
+
         [JsonPropertyName("note")]
         public string? Note { get; set; }
 
         [JsonPropertyName("version")]
         public int Version { get; set; }
+
+        private static string NormalizeStatus(string? status)
+        {
+            var normalized = new string((status ?? string.Empty)
+                .Trim()
+                .ToLowerInvariant()
+                .Where(char.IsLetterOrDigit)
+                .ToArray());
+
+            if (string.IsNullOrEmpty(normalized)) return "draft";
+            if (normalized.Contains("return") || normalized.Contains("reject")) return "returned";
+            if (normalized.Contains("final")) return "finalized";
+            if (normalized.Contains("departmentapproved") || normalized.Contains("approved") || normalized.Contains("forwarded")) return "approved";
+            if (normalized.Contains("submitted") || normalized.Contains("issued")) return "submitted";
+            if (normalized.Contains("corrected")) return "corrected";
+
+            return "draft";
+        }
     }
 }

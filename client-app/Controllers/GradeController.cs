@@ -35,7 +35,7 @@ namespace BlockGo.Controllers
     public class GradesController : ControllerBase
     {
         private readonly IBlockchainService _blockchainService;
-        private readonly string _connectionString;
+        private readonly NpgsqlDataSource _dataSource;
         private readonly ILogger<GradesController> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IConfiguration _configuration;
@@ -43,15 +43,16 @@ namespace BlockGo.Controllers
         private readonly IHubContext<ChatHub> _chatHubContext;
 
         public GradesController(
-            IBlockchainService blockchainService, 
-            IConfiguration configuration,
+            IBlockchainService blockchainService,
+            NpgsqlDataSource dataSource,
             ILogger<GradesController> logger,
             IHttpClientFactory httpClientFactory,
             IEmailService emailService,
-            IHubContext<ChatHub> chatHubContext)
+            IHubContext<ChatHub> chatHubContext,
+            IConfiguration configuration)
         {
             _blockchainService = blockchainService;
-            _connectionString = configuration.GetConnectionString("PostgresConnection") ?? configuration.GetConnectionString("MasterConnection") ?? throw new InvalidOperationException("PostgreSQL connection string not found.");
+            _dataSource = dataSource;
             _logger = logger;
             _httpClientFactory = httpClientFactory;
             _configuration = configuration;
@@ -78,6 +79,12 @@ namespace BlockGo.Controllers
         public class AcademicStatusRequest
         {
             public string Status { get; set; } = string.Empty;
+        }
+
+        public class ViewIpfsRequest
+        {
+            public string? VaultPassword { get; set; }
+            public string? Password { get; set; }
         }
 
         private async Task<(string? Department, string? Identity)> ResolveApprovedAcademicIdentityAsync(
@@ -121,8 +128,7 @@ namespace BlockGo.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var jwtUser = User.Identity?.Name
                     ?? User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Email)?.Value
@@ -387,8 +393,7 @@ namespace BlockGo.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var resolvedFaculty = await ResolveApprovedAcademicIdentityAsync(
                     conn,
@@ -504,7 +509,11 @@ namespace BlockGo.Controllers
         private byte[] EncryptStream(Stream inputStream)
         {
             using var aes = Aes.Create();
-            var key = _configuration["IpfsEncryptionKey"] ?? "default-encryption-key-32chars!!!";
+            var key = _configuration["IpfsEncryptionKey"];
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                throw new InvalidOperationException("IpfsEncryptionKey configuration is required.");
+            }
             aes.Key = System.Text.Encoding.UTF8.GetBytes(key.PadRight(32).Substring(0, 32));
             aes.GenerateIV();
             var iv = aes.IV;
@@ -1017,12 +1026,12 @@ namespace BlockGo.Controllers
                     var processedCombos = new HashSet<string>();
                     foreach (var record in parsedRecords)
                     {
+                        await using var conn = await _dataSource.OpenConnectionAsync();
                         try
                         {
                             if (string.IsNullOrEmpty(record.StudentId) || string.IsNullOrEmpty(record.Grade))
                             {
                                 failureCount++;
-                                errors.Add(new BulkUploadError { StudentId = record.StudentId ?? "UNKNOWN", Reason = "Missing student identifier or grade" });
                                 continue;
                             }
 
@@ -1033,9 +1042,6 @@ namespace BlockGo.Controllers
                                 continue;
                             }
                             processedCombos.Add(comboKey);
-
-                            using var conn = new NpgsqlConnection(_connectionString);
-                            await conn.OpenAsync();
 
                             using var cmdStu = new NpgsqlCommand("SELECT sp.department, u.email FROM Users u JOIN StudentProfiles sp ON u.id = sp.user_id WHERE (sp.student_no = @sid OR u.email = @sid) AND u.role = 'student'", conn);
                             cmdStu.Parameters.AddWithValue("sid", record.StudentId);
@@ -1376,8 +1382,7 @@ namespace BlockGo.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 using var cmdCheck = new NpgsqlCommand("SELECT grade FROM pending_grade_records WHERE id = @id", conn);
                 cmdCheck.Parameters.AddWithValue("id", correction.RecordID);
@@ -1453,8 +1458,7 @@ namespace BlockGo.Controllers
                     _logger.LogWarning("Could not fetch blockchain grades: {Msg}", ex.Message);
                 }
 
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 
                 using var cmdInitTable = new NpgsqlCommand("CREATE TABLE IF NOT EXISTS pending_grade_records (id VARCHAR(255) PRIMARY KEY, student_hash VARCHAR(255), student_no VARCHAR(255), student_name VARCHAR(255), section VARCHAR(100), course VARCHAR(255), subject_code VARCHAR(100), grade TEXT, semester VARCHAR(50), school_year VARCHAR(50), faculty_id VARCHAR(255), date VARCHAR(50), ipfs_cid VARCHAR(255), status VARCHAR(50), note TEXT);", conn);
                 await cmdInitTable.ExecuteNonQueryAsync();
@@ -1549,7 +1553,6 @@ namespace BlockGo.Controllers
 
                     if (isStudent && !string.Equals(g.Status, "Finalized", StringComparison.OrdinalIgnoreCase))
                     {
-                        continue;
                         g.Grade = "";
                         g.Note = "Pending Finalization";
                     }
@@ -1607,8 +1610,7 @@ namespace BlockGo.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmd = new NpgsqlCommand("SELECT id, student_hash, student_no, student_name, section, course, subject_code, grade, semester, school_year, faculty_id, date, ipfs_cid, status, note FROM pending_grade_records WHERE id = @id", conn);
                 cmd.Parameters.AddWithValue("id", recordId);
                 
@@ -1637,7 +1639,6 @@ namespace BlockGo.Controllers
                         };
                         
                         if (isStudent && !string.Equals(localGrade.Status, "Finalized", StringComparison.OrdinalIgnoreCase))
-                            return NotFound(new { status = "Error", message = "Grade is pending finalization." });
                         {
                             localGrade.Grade = "";
                             localGrade.Note = "Pending Finalization";
@@ -1703,8 +1704,7 @@ namespace BlockGo.Controllers
             
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmd = new NpgsqlCommand("UPDATE pending_grade_records SET status = 'DepartmentApproved' WHERE id = @id RETURNING id", conn);
                 cmd.Parameters.AddWithValue("id", recordId);
                 var res = await cmd.ExecuteScalarAsync();
@@ -1736,8 +1736,7 @@ namespace BlockGo.Controllers
             
             if (!isRegistrar)
             {
-                using var connIntercept = new NpgsqlConnection(_connectionString);
-                await connIntercept.OpenAsync();
+                await using var connIntercept = await _dataSource.OpenConnectionAsync();
                 using var cmdApprove = new NpgsqlCommand("UPDATE pending_grade_records SET status = 'DepartmentApproved' WHERE id = @id", connIntercept);
                 cmdApprove.Parameters.AddWithValue("id", recordId);
                 await cmdApprove.ExecuteNonQueryAsync();
@@ -1748,8 +1747,7 @@ namespace BlockGo.Controllers
             
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 
                 using var cmd = new NpgsqlCommand("SELECT id, student_hash, student_no, student_name, section, course, subject_code, grade, semester, school_year, faculty_id, date, ipfs_cid, note FROM pending_grade_records WHERE id = @id", conn);
                 cmd.Parameters.AddWithValue("id", recordId);
@@ -1891,9 +1889,8 @@ namespace BlockGo.Controllers
                 await _blockchainService.UpdateGradeAsync(gradeRecord, invokerId);
 
                 // 5. Log the update for audit purposes
-                using (var conn = new NpgsqlConnection(_connectionString))
+                await using (var conn = await _dataSource.OpenConnectionAsync())
                 {
-                    await conn.OpenAsync();
                     using var cmdLog = new NpgsqlCommand(@"
                         INSERT INTO gradecorrectionlogs (recordid, oldgrade, newgrade, reasontext, approvedby, timestamp) 
                         VALUES (@rid, @old, @new, @reason, @appr, CURRENT_TIMESTAMP)", conn);
@@ -1919,8 +1916,7 @@ namespace BlockGo.Controllers
         private async Task<bool> UpdatePendingGradeJsonAsync(string recordId, Action<System.Text.Json.Nodes.JsonObject> updateAction)
         {
             try {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 using var cmdSel = new NpgsqlCommand("SELECT grade FROM pending_grade_records WHERE id = @id", conn);
                 cmdSel.Parameters.AddWithValue("id", recordId);
                 var existingGrade = await cmdSel.ExecuteScalarAsync() as string;
@@ -1990,8 +1986,7 @@ namespace BlockGo.Controllers
 
                 if (request.IsFlagged) {
                     try {
-                        using var conn = new NpgsqlConnection(_connectionString);
-                        await conn.OpenAsync();
+                        await using var conn = await _dataSource.OpenConnectionAsync();
                         using var cmdChair = new NpgsqlCommand("SELECT u.email FROM Users u JOIN AdminProfiles ap ON u.id = ap.user_id WHERE ap.department = @dept AND u.role IN ('department_admin', 'deptAdmin') AND u.status = 'APPROVED' LIMIT 1", conn);
                         cmdChair.Parameters.AddWithValue("dept", gradeToUpdate.Course ?? "");
                         var chairEmail = (await cmdChair.ExecuteScalarAsync()) as string;
@@ -2021,8 +2016,7 @@ namespace BlockGo.Controllers
             {
                 var invokerId = request.InvokerId ?? User.Identity?.Name ?? "Unknown";
                 
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
                 
                 using var cmd = new NpgsqlCommand("UPDATE pending_grade_records SET status = 'Returned', note = @note, date = @dt WHERE id = @id RETURNING id", conn);
                 cmd.Parameters.AddWithValue("note", request.Note ?? "");
@@ -2142,8 +2136,7 @@ namespace BlockGo.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var logs = new List<object>();
                 using var cmd = new NpgsqlCommand(@"
@@ -2178,8 +2171,7 @@ namespace BlockGo.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var logs = new List<object>();
                 using var cmd = new NpgsqlCommand(@"
@@ -2263,11 +2255,47 @@ namespace BlockGo.Controllers
             catch (Exception ex) { return StatusCode(500, new { status = "Error", message = $"IPFS service unreachable: {ex.Message}" }); }
         }
 
+        [HttpPost("view-ipfs/{cid}")]
+        public async Task<IActionResult> ViewIpfsFilePost(string cid)
+        {
+            ViewIpfsRequest? request = null;
+            if (Request.HasFormContentType)
+            {
+                request = new ViewIpfsRequest
+                {
+                    VaultPassword = Request.Form["vaultPassword"].ToString(),
+                    Password = Request.Form["password"].ToString()
+                };
+            }
+            else if (Request.ContentLength.GetValueOrDefault() > 0)
+            {
+                try
+                {
+                    request = await JsonSerializer.DeserializeAsync<ViewIpfsRequest>(
+                        Request.Body,
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                }
+                catch (JsonException)
+                {
+                    return BadRequest(new { status = "Error", message = "Invalid IPFS vault request body." });
+                }
+            }
+
+            var vaultPassword = request?.VaultPassword ?? request?.Password;
+            if (string.IsNullOrWhiteSpace(vaultPassword))
+            {
+                return BadRequest(new { status = "Error", message = "Vault Password is required." });
+            }
+
+            return await ViewIpfsFile(cid, vaultPassword);
+        }
+
         [HttpGet("view-ipfs/{cid}")]
-        public async Task<IActionResult> ViewIpfsFile(string cid)
+        public async Task<IActionResult> ViewIpfsFile(string cid, string? providedVaultPassword = null)
         {
             // Resilient parameter detection
-            var vaultPassword = Request.Query["vaultPassword"].ToString();
+            var vaultPassword = providedVaultPassword;
+            if (string.IsNullOrEmpty(vaultPassword)) vaultPassword = Request.Query["vaultPassword"].ToString();
             if (string.IsNullOrEmpty(vaultPassword)) vaultPassword = Request.Query["password"].ToString();
             if (string.IsNullOrEmpty(vaultPassword)) vaultPassword = Request.Query["vault_password"].ToString();
             if (string.IsNullOrEmpty(vaultPassword)) vaultPassword = Request.Query["vaultpass"].ToString();
@@ -2307,8 +2335,8 @@ namespace BlockGo.Controllers
                         
                         <div class='cid-box'>CID: {cid}</div>
 
-                        <form onsubmit='handleSubmit(event)'>
-                            <input type='password' id='pass' placeholder='Enter Vault Password' required autofocus />
+                        <form method='post'>
+                            <input type='password' id='pass' name='vaultPassword' placeholder='Enter Vault Password' required autofocus />
                             <button type='submit'>Decrypt & View in Browser</button>
                         </form>
 
@@ -2316,22 +2344,17 @@ namespace BlockGo.Controllers
                             <a href='/ipfs/{cid}' target='_blank'>View Raw Encrypted Block (via IPFS Gateway)</a>
                         </div>
                     </div>
-                    <script>
-                        function handleSubmit(e) {{
-                            e.preventDefault();
-                            const pass = document.getElementById('pass').value;
-                            const url = new URL(window.location.href);
-                            url.searchParams.set('vaultPassword', pass);
-                            window.location.href = url.toString();
-                        }}
-                    </script>
                 </body>
                 </html>";
                 return Content(html, "text/html");
             }
 
             // Verify vault password against internal secret (simple check for this prototype)
-            var expectedPassword = _configuration["VaultPassword"] ?? "PLV-Vault-2026";
+            var expectedPassword = _configuration["VaultPassword"];
+            if (string.IsNullOrWhiteSpace(expectedPassword))
+            {
+                return StatusCode(500, new { status = "Error", message = "VaultPassword configuration is required." });
+            }
             if (vaultPassword != expectedPassword)
             {
                 return BadRequest(new { status = "Error", message = "Invalid Vault Password. Access Denied." });
@@ -2371,7 +2394,11 @@ namespace BlockGo.Controllers
                 byte[] ciphertext = new byte[encryptedData.Length - 16];
                 Array.Copy(encryptedData, 16, ciphertext, 0, ciphertext.Length);
 
-                var key = _configuration["IpfsEncryptionKey"] ?? "default-encryption-key-32chars!!!";
+                var key = _configuration["IpfsEncryptionKey"];
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    return StatusCode(500, new { status = "Error", message = "IpfsEncryptionKey configuration is required." });
+                }
                 var keyBytes = System.Text.Encoding.UTF8.GetBytes(key.PadRight(32).Substring(0, 32));
 
                 using var aes = Aes.Create();

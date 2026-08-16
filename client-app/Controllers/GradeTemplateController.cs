@@ -18,13 +18,11 @@ namespace Client_app.Controllers
     [Route("api/[controller]")]
     public class GradeTemplateController : ControllerBase
     {
-        private readonly string _writeConnectionString;
-        private readonly string _readConnectionString;
+        private readonly NpgsqlDataSource _dataSource;
 
-        public GradeTemplateController(IConfiguration configuration)
+        public GradeTemplateController(NpgsqlDataSource dataSource)
         {
-            _writeConnectionString = configuration.GetConnectionString("MasterConnection") ?? configuration.GetConnectionString("PostgresConnection") ?? throw new InvalidOperationException("Database connection string not found.");
-            _readConnectionString = configuration.GetConnectionString("ReplicaConnection") ?? configuration.GetConnectionString("PostgresConnection") ?? throw new InvalidOperationException("Database connection string not found.");
+            _dataSource = dataSource;
         }
 
         [HttpPost("create")]
@@ -35,8 +33,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_writeConnectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 string query = @"
                     INSERT INTO GradeTemplates (template_name, department, formula_config, status, created_at)
@@ -63,8 +60,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_readConnectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 var templates = new List<object>();
                 using var cmd = new NpgsqlCommand("SELECT id, template_name, formula_config, status, created_at FROM GradeTemplates WHERE department = @dept", conn);
@@ -98,8 +94,7 @@ namespace Client_app.Controllers
 
             try
             {
-                using var conn = new NpgsqlConnection(_writeConnectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 using var cmd = new NpgsqlCommand("UPDATE GradeTemplates SET status = @status WHERE id = @id", conn);
                 cmd.Parameters.AddWithValue("status", request.Status);
@@ -121,8 +116,7 @@ namespace Client_app.Controllers
         {
             try
             {
-                using var conn = new NpgsqlConnection(_readConnectionString);
-                await conn.OpenAsync();
+                await using var conn = await _dataSource.OpenConnectionAsync();
 
                 // 1. Dynamically resolve the true department of this section to support cross-department teaching
                 using var cmdResolveDept = new NpgsqlCommand("SELECT department FROM StudentProfiles WHERE section = @section AND department IS NOT NULL LIMIT 1", conn);
