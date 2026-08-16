@@ -28,7 +28,6 @@ spec:
   - Ingress
   ingress:
   - from:
-    - namespaceSelector: {}
     - ipBlock:
         cidr: 35.191.0.0/16
     - ipBlock:

@@ -7,6 +7,7 @@ metadata:
 data:
   01-disable-autoconf.sh: |-
     #!/bin/sh
+    set -eu
     echo "Disabling AutoConf and clearing auto-placeholders for private network..."
     ipfs config --json AutoConf.Enabled false
     ipfs config --json Bootstrap "[]"
@@ -15,7 +16,9 @@ data:
     ipfs config --json Ipns.DelegatedPublishers "[]"
     ipfs config Routing.Type dht
     ipfs config --json AutoTLS.Enabled false
-    cp /etc/ipfs/swarm.key /data/ipfs/swarm.key || true
+    ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
+    ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
+    install -m 0400 /etc/ipfs/swarm.key /data/ipfs/swarm.key
 ---
 # IPFS Node StatefulSet (Distributed Storage)
 apiVersion: apps/v1
@@ -41,17 +44,42 @@ spec:
         fsGroup: 0
       initContainers:
       - name: fix-permissions
-        image: busybox
+        image: busybox:1.36.1
+        imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 0
-        command: ["sh", "-c", "chown -R 1000:100 /data/ipfs"]
+        command: ["sh", "-c", "mkdir -p /data/ipfs && chown -R 1000:100 /data/ipfs && chmod -R u+rwX,g+rwX /data/ipfs"]
         volumeMounts:
         - name: ipfs-data
           mountPath: /data/ipfs
       containers:
       - name: ipfs
-        image: ipfs/kubo:latest
+        image: ipfs/kubo:v0.41.0
         imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -ec
+        - |
+          if [ "${IPFS_RUN_AS_ROOT:-false}" = "true" ]; then
+            if [ ! -e "${IPFS_PATH}/config" ]; then
+              if [ -n "${IPFS_PROFILE:-}" ]; then
+                ipfs init --profile="${IPFS_PROFILE}"
+              else
+                ipfs init
+              fi
+              ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
+              ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
+            fi
+
+            for script in /container-init.d/*.sh; do
+              [ -f "$script" ] || continue
+              /bin/sh "$script"
+            done
+
+            exec /sbin/tini -- ipfs daemon --migrate=true
+          fi
+
+          exec /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true
         ports:
         - containerPort: 4001
           name: swarm
@@ -69,8 +97,12 @@ spec:
           value: "/etc/ipfs/swarm.key"
         - name: LIBP2P_FORCE_PNET
           value: "1"
-        - name: IPFS_ALLOW_ROOT
-          value: "true"
+        - name: LIBP2P_TCP_MUX
+          value: "false"
+        - name: IPFS_TELEMETRY
+          value: "off"
+        - name: IPFS_RUN_AS_ROOT
+          value: "false"
         volumeMounts:
         - name: ipfs-data
           mountPath: /data/ipfs
@@ -82,20 +114,24 @@ spec:
         - name: ipfs-init-volume
           mountPath: /container-init.d/01-disable-autoconf.sh
           subPath: 01-disable-autoconf.sh
+        startupProbe:
+          tcpSocket:
+            port: 5001
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
         livenessProbe:
-          exec:
-            command:
-            - ipfs
-            - id
+          tcpSocket:
+            port: 5001
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
         readinessProbe:
-          exec:
-            command:
-            - ipfs
-            - id
+          tcpSocket:
+            port: 5001
           initialDelaySeconds: 15
           periodSeconds: 5
+          timeoutSeconds: 5
       volumes:
       - name: swarm-key
         configMap:
@@ -105,11 +141,12 @@ spec:
       - name: ipfs-init-volume
         configMap:
           name: ipfs-init-config
-          defaultMode: 0777
+          defaultMode: 511
   volumeClaimTemplates:
   - metadata:
       name: ipfs-data
     spec:
+      storageClassName: fabric-storage
       accessModes: [ "ReadWriteOnce" ]
       resources:
         requests:

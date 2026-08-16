@@ -5,6 +5,11 @@ metadata:
   namespace: plv-fabric
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: client-app
@@ -19,6 +24,30 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 5000
+            scheme: HTTP
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 60
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+            scheme: HTTP
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+            scheme: HTTP
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
         envFrom:
         - secretRef:
             name: blockgo-secrets
@@ -54,13 +83,25 @@ spec:
           valueFrom:
             secretKeyRef:
               name: blockgo-secrets
-              key: BOOTSTRAP_REGISTRAR_PASS
+              key: VAULT_PASSWORD
         - name: MIDDLEWARE_URL
+          value: "http://middleware-api.plv-fabric.svc.cluster.local:4000"
+        - name: Middleware__Url
           value: "http://middleware-api.plv-fabric.svc.cluster.local:4000"
         - name: MiddlewareUrl
           value: "http://middleware-api.plv-fabric.svc.cluster.local:4000"
         - name: MiddlewareApiUrl
           value: "http://middleware-api.plv-fabric.svc.cluster.local:4000"
+        - name: Monitoring__FrontendUrl
+          value: "http://frontend-service.plv-fabric.svc.cluster.local"
+        - name: Monitoring__MiddlewareUrl
+          value: "http://middleware-api.plv-fabric.svc.cluster.local:4000"
+        - name: Monitoring__PrometheusUrl
+          valueFrom:
+            secretKeyRef:
+              name: blockgo-secrets
+              key: PROMETHEUS_URL
+              optional: true
         - name: InternalApiKey
           valueFrom:
             secretKeyRef:
@@ -72,13 +113,15 @@ spec:
               name: blockgo-secrets
               key: INTERNAL_API_KEY
         - name: IPFS_HOST
-          value: "ipfs-api.plv-fabric.svc.cluster.local"
+          value: "ipfs-gateway.plv-fabric.svc.cluster.local"
+        - name: IpfsApiUrl
+          value: "http://ipfs-api.plv-fabric.svc.cluster.local:5001/api/v0/add?cid-version=1&wrap-with-directory=false"
         - name: IpfsUrl
           value: "http://ipfs-api.plv-fabric.svc.cluster.local:5001"
         - name: IpfsGatewayUrl
           value: "http://ipfs-gateway.plv-fabric.svc.cluster.local:8080"
         - name: IPFS_PEER_NODES
-          value: "ipfs-node-0.ipfs-node.plv-fabric.svc.cluster.local,ipfs-node-1.ipfs-node.plv-fabric.svc.cluster.local,ipfs-node-2.ipfs-node.plv-fabric.svc.cluster.local"
+          value: "ipfs-node-0.ipfs-headless.plv-fabric.svc.cluster.local"
         - name: POSTGRES_DB
           value: "ActivityLogs"
         - name: POSTGRES_USER
@@ -121,23 +164,3 @@ spec:
   - protocol: TCP
     port: 5000
     targetPort: 5000
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: client-app-hpa
-  namespace: plv-fabric
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: client-app
-  minReplicas: 1
-  maxReplicas: 3
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70

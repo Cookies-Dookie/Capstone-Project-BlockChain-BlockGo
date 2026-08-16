@@ -21,7 +21,9 @@ spec:
     - protocol: TCP
       port: 5984
   - from:
-    - namespaceSelector: {}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: plv-fabric
       podSelector:
         matchExpressions:
           - key: app
@@ -55,7 +57,9 @@ spec:
     - protocol: TCP
       port: 5984
   - from:
-    - namespaceSelector: {}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: plv-fabric
       podSelector:
         matchExpressions:
           - key: app
@@ -89,7 +93,9 @@ spec:
     - protocol: TCP
       port: 5984
   - from:
-    - namespaceSelector: {}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: plv-fabric
       podSelector:
         matchExpressions:
           - key: app

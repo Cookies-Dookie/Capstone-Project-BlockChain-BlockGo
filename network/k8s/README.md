@@ -14,15 +14,26 @@
 cd ../network
 chmod +x ./full_deploy.sh
 
-# Deploy Hybrid Architecture (K8s Apps + Compose Data)
-./full_deploy.sh k8s apply
+# Local testing profile
+./k8s/deploy-k8s.sh local apply
+
+# The local frontend and API gateway are exposed automatically at:
+# http://localhost:8080
+
+# Production/GKE profile
+./k8s/deploy-k8s.sh production apply
 
 # Monitor deployment status
-./full_deploy.sh k8s status
+./k8s/deploy-k8s.sh local status
 
 # View logs
 kubectl logs deployment/plv-middleware -n plv-fabric -f
 ```
+
+The local profile does not create application HPAs because Docker Desktop does
+not expose the `metrics.k8s.io` resource metrics API by default. The production
+profile applies `11a-application-hpa.yaml`; confirm the target cluster provides
+the resource metrics API before deploying.
 
 ### 3. Verify Deployment
 
@@ -41,6 +52,13 @@ kubectl get pvc --all-namespaces
 
 ### 4. Access the API
 
+For the local profile, use `http://localhost:8080`. The frontend Nginx service
+routes browser requests to the middleware, C# backend, SignalR hub, and IPFS
+services inside Kubernetes. The deployment script owns the background
+port-forward and `./k8s/deploy-k8s.sh local delete` stops it forcefully.
+
+Direct middleware access is optional for debugging:
+
 ```bash
 # Port-forward middleware API
 kubectl port-forward -n plv-fabric svc/middleware-api 4000:4000
@@ -49,20 +67,64 @@ kubectl port-forward -n plv-fabric svc/middleware-api 4000:4000
 curl http://localhost:4000/api/health
 ```
 
-### 5. Initialize Fabric Network
+### System Administrator Portal
 
-After pods are running:
+The system administrator uses the normal frontend login page and is routed to
+the dedicated monitoring portal. This role is database-only: it is not enrolled
+with a Fabric CA, does not receive a Fabric wallet, and does not load academic
+grade or chat features.
+
+Set a strong, unique password in `network/.env` before deployment to provision
+the account through the internal bootstrap job:
+
+```dotenv
+BOOTSTRAP_SYSTEM_ADMIN_EMAIL=system-admin@plv.edu.ph
+BOOTSTRAP_SYSTEM_ADMIN_PASS=<strong-unique-password>
+```
+
+The bootstrap creates the account only when it does not exist and never prints
+the password. Changing the environment variable later does not rotate an
+existing account password.
+
+Cluster resource metrics and alerts are optional. Set `PROMETHEUS_URL` to a URL
+reachable from the `client-app` pod when Prometheus is deployed. Without it,
+the portal still checks frontend, middleware, backend, and PostgreSQL health and
+reports Prometheus as `not configured`.
+
+### 5. Fabric Network Bootstrap
+
+`deploy-k8s.sh ... apply` automatically joins all orderers and peers to
+`registrar-channel`, installs the organization-specific CCaaS packages,
+approves and commits the chaincode, and initializes the genesis record.
+
+To rerun the idempotent bootstrap manually:
 
 ```bash
-# Create channel
 ./k8s/init-channel.sh
-
-# Install chaincode
+./k8s/join-peers.sh
 ./k8s/install-chaincode.sh
-
-# Instantiate chaincode
-./k8s/instantiate-chaincode.sh
 ```
+
+Set `FABRIC_BOOTSTRAP=false` when running `deploy-k8s.sh` only when manifests
+must be applied without changing Fabric channel or chaincode state.
+
+### 6. CouchDB Data Locations
+
+- Wallet CouchDB services (`localhost:5990`, `6990`, and `7990` in Compose)
+  store Fabric identities only. They do not store grades.
+- Peer CouchDB services store Fabric world state. For Compose, the registrar
+  peer database is exposed at `http://localhost:5985/_utils/`.
+- In Kubernetes, port-forward the peer service when direct inspection is
+  required:
+
+```bash
+kubectl port-forward -n plv-main-campus svc/couchdb-registrar 5985:5984
+```
+
+After bootstrap, CouchDB creates `registrar-channel_registrar`. It contains the
+genesis record and grades that have completed registrar finalization. Grades
+that are still being encoded, reviewed, returned, or department-approved remain
+in PostgreSQL `pending_grade_records` until finalization succeeds.
 
 ## Architecture Overview
 
@@ -93,7 +155,12 @@ After pods are running:
 ## Security
 
 ### Secrets Management
-- All credentials in `02-configmap-secret.yaml`
+- Runtime credentials are generated from `network/.env` into `blockgo-secrets`
+- `02-configmap-secret.yaml` contains only non-secret ConfigMaps
+- Required application keys: `JWT_SECRET`, `INTERNAL_API_KEY`, `IPFS_ENCRYPTION_KEY`, `BOOTSTRAP_REGISTRAR_PASS`, `VAULT_PASSWORD`
+- System administrator provisioning requires `BOOTSTRAP_SYSTEM_ADMIN_PASS`; `BOOTSTRAP_SYSTEM_ADMIN_EMAIL` is optional
+- Monitoring integration uses optional `PROMETHEUS_URL`
+- Production also requires real `POSTGRES_PASS`, `POSTGRES_REPL_PASS`, and `COUCHDB_PASS`
 - For production: Use HashiCorp Vault, AWS Secrets Manager, or Azure Key Vault
 
 ### RBAC
@@ -142,10 +209,12 @@ kubectl get secret blockgo-secrets -n plv-fabric -o yaml
 ## Cleanup
 
 ```bash
-# Delete all resources
-./k8s/deploy-k8s.sh plv-fabric delete
+# Force-stop local PLV workloads and remove their namespaces, claims, and PVs.
+# Project Docker Compose services, port-forwards, and the failover watchdog are
+# also stopped. Files under network/fabric-k8s-data are preserved.
+./k8s/deploy-k8s.sh local delete
 
-# Or manually
+# Graceful manual alternative
 kubectl delete namespace plv-fabric plv-main-campus plv-annex-campus plv-pubad-campus
 ```
 
@@ -162,9 +231,14 @@ kubectl delete namespace plv-fabric plv-main-campus plv-annex-campus plv-pubad-c
    - Test disaster recovery
 
 3. **Monitoring**
-   - Deploy Prometheus + Grafana
+   - Deploy Prometheus + Grafana; the repository currently provides configuration and alert rules, not those workloads
+   - Mount `../monitoring/prometheus.yaml` and `../monitoring/alert-rules.yaml`, then set `PROMETHEUS_URL` to the in-cluster Prometheus service
+   - Import `../monitoring/grafana-dashboard.json`
+   - Scrape middleware metrics from `middleware-api:4000/metrics`
+   - Use kube-state-metrics and cAdvisor panels for frontend, client-app, and middleware deployment health
+   - Use `/nginx-health`, `/api/backend/health`, `/api/health`, and `/api/ready` for runtime health checks
    - Enable audit logging
-   - Set up alerts for pod failures
+   - Set up alerts for frontend/client-app availability, pod restarts, and memory pressure
 
 4. **Secrets**
    - Rotate credentials regularly

@@ -1,4 +1,16 @@
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orderer-1-pvc
+  namespace: plv-main-campus
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: fabric-storage
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,10 +28,6 @@ spec:
         org: orderer
     spec:
       serviceAccountName: orderer-sa
-      # FIXED: Map certificate hostnames to internal IPs
-      hostAliases:
-      - ip: "127.0.0.1"
-        hostnames: ["orderer.capstone.com"]
       containers:
       - name: orderer
         image: hyperledger/fabric-orderer:2.5.4
@@ -107,7 +115,8 @@ spec:
           subPath: registrar-channel.block
       volumes:
       - name: orderer-storage
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: orderer-1-pvc
       - name: config
         configMap:
           name: fabric-common-config

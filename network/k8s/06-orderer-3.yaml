@@ -1,5 +1,17 @@
 ---
 # Fabric Orderer 3 (Annex Campus)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orderer-3-pvc
+  namespace: plv-annex-campus
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: fabric-storage
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -124,7 +136,8 @@ spec:
           periodSeconds: 5
       volumes:
       - name: orderer-storage
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: orderer-3-pvc
       - name: orderer-config
         configMap:
           name: fabric-common-config

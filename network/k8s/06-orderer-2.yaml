@@ -1,5 +1,17 @@
 ---
 # Fabric Orderer 2 (Main Campus)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orderer-2-pvc
+  namespace: plv-main-campus
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: fabric-storage
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -126,7 +138,8 @@ spec:
           periodSeconds: 5
       volumes:
       - name: orderer-storage
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: orderer-2-pvc
       - name: orderer-config
         configMap:
           name: fabric-common-config

@@ -72,18 +72,27 @@ data:
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS pending_grade_records (
-        id SERIAL PRIMARY KEY,
-        faculty_id VARCHAR(100),
-        student_id VARCHAR(100),
+        id VARCHAR(255) PRIMARY KEY,
         student_hash VARCHAR(255),
+        student_no VARCHAR(255),
+        student_name VARCHAR(255),
+        student_id VARCHAR(255),
+        student_email VARCHAR(255),
+        batch_id UUID,
         department VARCHAR(100),
-        section VARCHAR(50),
-        subject_code VARCHAR(50),
-        course VARCHAR(100),
-        year_level VARCHAR(20),
+        section VARCHAR(100),
+        subject_code VARCHAR(100),
+        subject_name VARCHAR(255),
+        course VARCHAR(255),
+        year_level VARCHAR(50),
         semester VARCHAR(50),
         school_year VARCHAR(50),
+        faculty_id VARCHAR(255),
         grade TEXT,
+        date VARCHAR(50),
+        ipfs_cid VARCHAR(255),
+        note TEXT,
+        blockchain_record_id VARCHAR(255),
         status VARCHAR(50) DEFAULT 'Pending',
         submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -91,10 +100,15 @@ data:
         key VARCHAR(100) PRIMARY KEY,
         value TEXT NOT NULL
     );
-    -- Insert default admin if needed
-    INSERT INTO users (username, email, password_hash, role, organization, status)
-    VALUES ('admin', 'registrar@plv.edu.ph', '$2b$10$YourHashedPasswordHere', 'admin', 'Registrar', 'active')
-    ON CONFLICT (email) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS facultysections (
+        id SERIAL PRIMARY KEY,
+        user_id INT REFERENCES users(id) ON DELETE CASCADE,
+        department VARCHAR(100) NOT NULL,
+        section VARCHAR(50) NOT NULL,
+        year_level VARCHAR(50),
+        subject VARCHAR(100),
+        assigned_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
   02-runtime_schema_hardening.sql: |
     -- Migration: Move request-time schema creation into database migrations
     -- Purpose: Auth, sectioning, settings, chat, and staged-grade controllers assume this schema exists.
@@ -126,32 +140,48 @@ data:
     CREATE TABLE IF NOT EXISTS pending_grade_records (
         id VARCHAR(255) PRIMARY KEY,
         student_hash VARCHAR(255),
+        student_no VARCHAR(255),
+        student_name VARCHAR(255),
+        student_id VARCHAR(255),
+        student_email VARCHAR(255),
+        batch_id UUID,
         section VARCHAR(100),
         course VARCHAR(255),
         subject_code VARCHAR(100),
+        subject_name VARCHAR(255),
         grade TEXT,
         semester VARCHAR(50),
         school_year VARCHAR(50),
         faculty_id VARCHAR(255),
         date VARCHAR(50),
         ipfs_cid VARCHAR(255),
+        blockchain_record_id VARCHAR(255),
         status VARCHAR(50),
         note TEXT
     );
 
-    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS id VARCHAR(255);
+    ALTER TABLE pending_grade_records ALTER COLUMN id DROP DEFAULT;
+    ALTER TABLE pending_grade_records ALTER COLUMN id TYPE VARCHAR(255) USING id::text;
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS student_hash VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS student_no VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS student_name VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS student_id VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS student_email VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS batch_id UUID;
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS section VARCHAR(100);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS course VARCHAR(255);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS subject_code VARCHAR(100);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS subject_name VARCHAR(255);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS grade TEXT;
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS semester VARCHAR(50);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS school_year VARCHAR(50);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS faculty_id VARCHAR(255);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS date VARCHAR(50);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS ipfs_cid VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS blockchain_record_id VARCHAR(255);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS status VARCHAR(50);
     ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS note TEXT;
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
     ALTER TABLE pending_grade_records ALTER COLUMN grade TYPE TEXT;
 
     DO $$
@@ -204,7 +234,7 @@ data:
         ON pending_grade_records(id);
 
     CREATE UNIQUE INDEX IF NOT EXISTS unique_grade_entry
-        ON pending_grade_records(student_hash, subject_code, school_year, semester);
+        ON pending_grade_records(student_hash, subject_code, school_year, semester, section);
 
     CREATE TABLE IF NOT EXISTS chat_messages (
         id SERIAL PRIMARY KEY,
@@ -265,24 +295,15 @@ data:
         FOREIGN KEY (faculty_email) REFERENCES Users(email) ON DELETE CASCADE
     );
 
-    CREATE TABLE IF NOT EXISTS pending_grade_records (
-        record_id SERIAL PRIMARY KEY,
-        batch_id UUID NOT NULL,
-        student_id VARCHAR(255) NOT NULL,
-        student_email VARCHAR(255),
-        grade VARCHAR(10) NOT NULL,
-        subject_code VARCHAR(50),
-        subject_name VARCHAR(255),
-        course VARCHAR(255),
-        status VARCHAR(50) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'FINALIZED', 'REJECTED')),
-        blockchain_record_id VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (batch_id) REFERENCES bulk_grade_uploads(batch_id) ON DELETE CASCADE,
-        FOREIGN KEY (student_email) REFERENCES Users(email) ON DELETE CASCADE
-    );
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS batch_id UUID;
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS student_id VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS student_email VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS subject_name VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS blockchain_record_id VARCHAR(255);
+    ALTER TABLE pending_grade_records ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
     -- Indexes for performance
-    CREATE INDEX idx_bulk_uploads_status ON bulk_grade_uploads(status);
-    CREATE INDEX idx_bulk_uploads_faculty ON bulk_grade_uploads(faculty_email);
-    CREATE INDEX idx_pending_grades_batch ON pending_grade_records(batch_id);
-    CREATE INDEX idx_pending_grades_status ON pending_grade_records(status);
+    CREATE INDEX IF NOT EXISTS idx_bulk_uploads_status ON bulk_grade_uploads(status);
+    CREATE INDEX IF NOT EXISTS idx_bulk_uploads_faculty ON bulk_grade_uploads(faculty_email);
+    CREATE INDEX IF NOT EXISTS idx_pending_grades_batch ON pending_grade_records(batch_id);
+    CREATE INDEX IF NOT EXISTS idx_pending_grades_status ON pending_grade_records(status);

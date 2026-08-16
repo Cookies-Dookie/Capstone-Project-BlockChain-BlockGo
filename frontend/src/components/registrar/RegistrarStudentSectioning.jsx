@@ -6,7 +6,6 @@ import {
   buildStudentCsvContent,
   downloadCsvFile,
   downloadStudentCsvFile,
-  getDisplaySectionName,
   getDefaultSectionName,
   getStudentMiddleName,
   parseStudentIdSpreadsheet,
@@ -47,9 +46,6 @@ const compareStudentsByName = (left, right) => {
 
   return leftName.localeCompare(rightName);
 };
-
-const getCleanSectionLabel = (sectionName = "", fallbackName = "Unassigned") =>
-  getDisplaySectionName(sectionName, fallbackName);
 
 const buildGeneratedSections = ({
   program,
@@ -168,7 +164,6 @@ function RegistrarStudentSectioning({
     const saved = localStorage.getItem(STUDENT_BATCHES_KEY);
     return saved ? JSON.parse(saved) : [];
   });
-  const batchesRef = useRef(batches);
   const [activeWorkspace, setActiveWorkspace] = useState("sectioning");
   const [selectedBatchKey, setSelectedBatchKey] = useState("");
   const [sectioningBatchYear, setSectioningBatchYear] = useState(() =>
@@ -216,8 +211,6 @@ function RegistrarStudentSectioning({
     firstName: "",
     middleName: "",
   });
-  const [isEditingRoster, setIsEditingRoster] = useState(false);
-  const [editingStudents, setEditingStudents] = useState({});
 
   const syncBatchToBackend = async (batch, successMessage = "") => {
     if (!batch || !isRegistrarMode) return;
@@ -301,10 +294,9 @@ function RegistrarStudentSectioning({
       .sort(compareStudentsByName);
     return {
       ...section,
-      sectionName: getDisplaySectionName(
-        section.sectionName,
-        getDefaultSectionName(selectedBatch?.program, section.sectionCode)
-      ),
+      sectionName:
+        section.sectionName ||
+        getDefaultSectionName(selectedBatch?.program, section.sectionCode),
       assigned: sectionStudents.length,
       students: sectionStudents,
     };
@@ -345,18 +337,6 @@ function RegistrarStudentSectioning({
           );
         })
     : [];
-  const sectionRosterStudents = selectedSection
-    ? students
-        .filter((student) => {
-          const sectionYearLevel = selectedSection.yearLevel || selectedYearLevel;
-
-          return (
-            student.sectionCode === selectedSection.sectionCode &&
-            (student.yearLevel || sectionYearLevel) === sectionYearLevel
-          );
-        })
-        .sort(compareStudentsByName)
-    : [];
   const departmentGraduatingStudents = useMemo(
     () =>
       graduatingStudents
@@ -367,7 +347,7 @@ function RegistrarStudentSectioning({
           return (
             student.studentId.toLowerCase().includes(searchValue) ||
             buildStudentName(student).toLowerCase().includes(searchValue) ||
-            getCleanSectionLabel(student.sectionName, student.sectionCode || "")
+            (student.sectionName || student.sectionCode || "")
               .toLowerCase()
               .includes(searchValue)
           );
@@ -494,10 +474,9 @@ function RegistrarStudentSectioning({
           ...section,
           batchKey: batch.key,
           batchYear: batch.batchYear,
-          label: getCleanSectionLabel(
-            section.sectionName,
-            getDefaultSectionName(batch.program, section.sectionCode)
-          ),
+          label:
+            section.sectionName ||
+            getDefaultSectionName(batch.program, section.sectionCode),
         }))
       ),
     [departmentWorkspaces]
@@ -527,10 +506,7 @@ function RegistrarStudentSectioning({
             originBatchYear: batch.batchYear,
             sourceYearLevel: student.yearLevel || "Unassigned",
             sourceSection:
-              getCleanSectionLabel(
-                student.sectionName,
-                student.sectionCode || "Unassigned"
-              ),
+              student.sectionName || student.sectionCode || "Unassigned",
             targetYearLevel: nextYearLevel || "Graduating Review",
             targetSection: nextSectionCode
               ? getDefaultSectionName(batch.program, nextSectionCode)
@@ -555,7 +531,6 @@ function RegistrarStudentSectioning({
   })();
 
   useEffect(() => {
-    batchesRef.current = batches;
     localStorage.setItem(STUDENT_BATCHES_KEY, JSON.stringify(batches));
   }, [batches]);
 
@@ -602,15 +577,14 @@ function RegistrarStudentSectioning({
   const updateSelectedBatch = (updater) => {
     if (!activeBatchKey) return;
 
-    const nextBatches = batchesRef.current.map((batch) =>
-      batch.key === activeBatchKey ? updater(batch) : batch
+    setBatches((previousBatches) =>
+      previousBatches.map((batch) =>
+        batch.key === activeBatchKey ? updater(batch) : batch
+      )
     );
-    batchesRef.current = nextBatches;
-    setBatches(nextBatches);
   };
 
   const persistBatches = (nextBatches) => {
-    batchesRef.current = nextBatches;
     setBatches(nextBatches);
     localStorage.setItem(STUDENT_BATCHES_KEY, JSON.stringify(nextBatches));
     syncSectionedStudentsToStorage(nextBatches);
@@ -859,130 +833,6 @@ function RegistrarStudentSectioning({
       ),
       lastSectionedAt: new Date().toISOString(),
     }));
-  };
-
-  const buildEditableRoster = () =>
-    Object.fromEntries(
-      sectionRosterStudents.map((student) => [
-        student.studentId,
-        {
-          studentId: student.studentId || "",
-          sex: student.sex || "",
-          lastName: student.lastName || "",
-          firstName: student.firstName || "",
-          middleName: getStudentMiddleName(student) || "",
-          sectionCode: student.sectionCode || "",
-        },
-      ])
-    );
-
-  const handleStartRosterEdit = () => {
-    if (!selectedSection) return;
-    setEditingStudents(buildEditableRoster());
-    setIsEditingRoster(true);
-  };
-
-  const handleCancelRosterEdit = () => {
-    setIsEditingRoster(false);
-    setEditingStudents({});
-  };
-
-  const handleRosterFieldChange = (studentId, field, value) => {
-    setEditingStudents((current) => ({
-      ...current,
-      [studentId]: {
-        ...(current[studentId] || {}),
-        [field]: value,
-      },
-    }));
-  };
-
-  const handleSaveRosterEdit = () => {
-    if (!selectedSection || !selectedBatch) return;
-
-    const drafts = Object.values(editingStudents);
-    if (!drafts.length) {
-      handleCancelRosterEdit();
-      return;
-    }
-
-    const selectedSectionStudentIds = new Set(
-      sectionRosterStudents.map((student) => String(student.studentId || "").toLowerCase())
-    );
-    const otherStudentIds = new Set(
-      students
-        .filter(
-          (student) =>
-            !selectedSectionStudentIds.has(String(student.studentId || "").toLowerCase())
-        )
-        .map((student) => String(student.studentId || "").toLowerCase())
-    );
-    const seenDraftIds = new Set();
-
-    for (const draft of drafts) {
-      const trimmedStudentId = String(draft.studentId || "").trim();
-      const trimmedLastName = String(draft.lastName || "").trim();
-      const trimmedFirstName = String(draft.firstName || "").trim();
-      const trimmedMiddleName = String(draft.middleName || "").trim();
-
-      if (
-        !trimmedStudentId ||
-        !draft.sex ||
-        !trimmedLastName ||
-        !trimmedFirstName ||
-        !trimmedMiddleName
-      ) {
-        alert("Complete student ID, sex, and name fields before saving.");
-        return;
-      }
-
-      const normalizedStudentId = trimmedStudentId.toLowerCase();
-      if (seenDraftIds.has(normalizedStudentId)) {
-        alert("Duplicate student IDs found in the edited roster.");
-        return;
-      }
-      if (otherStudentIds.has(normalizedStudentId)) {
-        alert("A student ID in this edit already exists in another section.");
-        return;
-      }
-      seenDraftIds.add(normalizedStudentId);
-    }
-
-    updateSelectedBatch((batch) => ({
-      ...batch,
-      students: (batch.students || []).map((student) => {
-        const normalizedStudentId = String(student.studentId || "").toLowerCase();
-        if (!selectedSectionStudentIds.has(normalizedStudentId)) return student;
-
-        const draft = editingStudents[student.studentId];
-        if (!draft) return student;
-
-        const targetSection = sectionPlans.find(
-          (section) => section.sectionCode === draft.sectionCode
-        );
-
-        return {
-          ...student,
-          studentId: String(draft.studentId || "").trim(),
-          sex: draft.sex,
-          lastName: String(draft.lastName || "").trim(),
-          firstName: String(draft.firstName || "").trim(),
-          middleName: String(draft.middleName || "").trim(),
-          middleInitial: String(draft.middleName || "").trim(),
-          yearLevel: draft.sectionCode
-            ? targetSection?.yearLevel || selectedYearLevel
-            : "",
-          sectionCode: draft.sectionCode || "",
-          sectionName: draft.sectionCode
-            ? targetSection?.sectionName ||
-              getDefaultSectionName(batch.program, draft.sectionCode)
-            : "",
-        };
-      }),
-      lastSectionedAt: new Date().toISOString(),
-    }));
-
-    handleCancelRosterEdit();
   };
 
   const handleStartRemoveStudent = (student) => {
@@ -1289,7 +1139,7 @@ function RegistrarStudentSectioning({
   };
 
   const handleSaveSectioning = async () => {
-    const nextBatches = batchesRef.current.map((batch) =>
+    const nextBatches = batches.map((batch) =>
       batch.key === activeBatchKey && (batch.sectionPlans || []).length > 0
         ? {
             ...batch,
@@ -1301,7 +1151,6 @@ function RegistrarStudentSectioning({
     setBatches(nextBatches);
     localStorage.setItem(STUDENT_BATCHES_KEY, JSON.stringify(nextBatches));
     syncSectionedStudentsToStorage(nextBatches);
-    pushSectioningSharedState();
     onSectioningSaved?.();
     const batchToSync = nextBatches.find((batch) => batch.key === activeBatchKey);
     await syncBatchToBackend(batchToSync, "Sections saved and synced successfully.");
@@ -2256,12 +2105,7 @@ function RegistrarStudentSectioning({
                     value={`${student.batchKey}|${student.studentId}`}
                   >
                     {student.studentId} - {buildStudentName(student)} (
-                    {student.yearLevel},{" "}
-                    {getCleanSectionLabel(
-                      student.sectionName,
-                      student.sectionCode || "Unassigned"
-                    )}
-                    )
+                    {student.yearLevel}, {student.sectionName || "Unassigned"})
                   </option>
                 ))}
               </select>
@@ -2274,10 +2118,7 @@ function RegistrarStudentSectioning({
                   setIrregularSubjectForm((current) => ({
                     ...current,
                     subjectAssignmentId: event.target.value,
-                    assignedSection: getCleanSectionLabel(
-                      assignment?.sectionName,
-                      assignment?.sectionCode || ""
-                    ),
+                    assignedSection: assignment?.sectionName || "",
                     faculty: assignment?.facultyName || "",
                   }));
                 }}
@@ -2287,10 +2128,7 @@ function RegistrarStudentSectioning({
                 {departmentAssignments.map((assignment) => (
                   <option key={assignment.id} value={assignment.id}>
                     {assignment.subjectCode} - {assignment.subjectTitle} /{" "}
-                    {getCleanSectionLabel(
-                      assignment.sectionName,
-                      assignment.sectionCode || ""
-                    )}
+                    {assignment.sectionName}
                   </option>
                 ))}
               </select>
@@ -2389,11 +2227,7 @@ function RegistrarStudentSectioning({
                   .filter((subject) => (subject.status || "Pending") !== "Completed")
                   .map((subject) => (
                     <option key={subject.id} value={subject.id}>
-                      {subject.subjectCode} -{" "}
-                      {getCleanSectionLabel(
-                        subject.assignedSection,
-                        subject.assignedSectionCode || ""
-                      )}
+                      {subject.subjectCode} - {subject.assignedSection}
                     </option>
                   ))}
               </select>
@@ -2530,10 +2364,7 @@ function RegistrarStudentSectioning({
                           </span>
                         </td>
                         <td className="px-4 py-3 text-slate-700">
-                          {getCleanSectionLabel(
-                            assignment.assignedSection,
-                            assignment.assignedSectionCode || ""
-                          )}
+                          {assignment.assignedSection}
                         </td>
                         <td className="px-4 py-3 text-slate-700">
                           {assignment.faculty}
@@ -2887,70 +2718,27 @@ function RegistrarStudentSectioning({
             </section>
 
             <section ref={rosterRef} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="mb-5 flex flex-row flex-wrap items-center justify-between gap-3">
+              <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h3 className="text-xl font-bold text-[#003366]">
                     {selectedSection
-                      ? getDisplaySectionName(
-                          selectedSection.sectionName,
-                          getDefaultSectionName(
-                            selectedBatch.program,
-                            selectedSection.sectionCode
-                          )
+                      ? selectedSection.sectionName ||
+                        getDefaultSectionName(
+                          selectedBatch.program,
+                          selectedSection.sectionCode
                         )
                       : "Section Students"}
                   </h3>
                 </div>
 
-                <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-center">
-                  {isRegistrarMode ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {isEditingRoster ? (
-                        <div className="flex flex-nowrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={handleSaveRosterEdit}
-                            className="whitespace-nowrap rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-                          >
-                            Save Changes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleCancelRosterEdit}
-                            className="whitespace-nowrap rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                          >
-                            Cancel Edit
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleStartRosterEdit}
-                          disabled={!selectedSection}
-                          className="whitespace-nowrap rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                        >
-                          Edit Students
-                        </button>
-                      )}
-                    </div>
-                  ) : null}
-
-                  <input
-                    type="text"
-                    value={studentSearch}
-                    onChange={(event) => setStudentSearch(event.target.value)}
-                    placeholder="Search Student"
-                    disabled={isEditingRoster}
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-[#003366] disabled:bg-slate-100 lg:min-w-[260px] lg:max-w-xs"
-                  />
-                </div>
+                <input
+                  type="text"
+                  value={studentSearch}
+                  onChange={(event) => setStudentSearch(event.target.value)}
+                  placeholder="Search Student"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-[#003366] lg:max-w-xs"
+                />
               </div>
-
-              {isEditingRoster ? (
-                <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  Edit mode is on. You can update student ID, full name, sex, and section assignment before saving.
-                </div>
-              ) : null}
 
               {pendingRemoval ? (
                 <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4">
@@ -3026,115 +2814,22 @@ function RegistrarStudentSectioning({
                   </thead>
                   <tbody>
                     {visibleSectionStudents.length > 0 ? (
-                      visibleSectionStudents.map((student) => {
-                        const draft = editingStudents[student.studentId] || {
-                          studentId: student.studentId || "",
-                          sex: student.sex || "",
-                          lastName: student.lastName || "",
-                          firstName: student.firstName || "",
-                          middleName: getStudentMiddleName(student) || "",
-                          sectionCode: student.sectionCode || "",
-                        };
-
-                        return (
+                      visibleSectionStudents.map((student) => (
                         <tr key={student.studentId} className="border-b bg-white">
                           <td className="px-4 py-3 font-semibold text-slate-800">
-                            {isEditingRoster ? (
-                              <input
-                                type="text"
-                                value={draft.studentId}
-                                onChange={(event) =>
-                                  handleRosterFieldChange(
-                                    student.studentId,
-                                    "studentId",
-                                    event.target.value
-                                  )
-                                }
-                                className="w-full min-w-28 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#003366]"
-                              />
-                            ) : (
-                              student.studentId
-                            )}
+                            {student.studentId}
                           </td>
                           <td className="px-4 py-3 text-slate-700">
-                            {isEditingRoster ? (
-                              <div className="grid gap-2">
-                                <input
-                                  type="text"
-                                  value={draft.lastName}
-                                  onChange={(event) =>
-                                    handleRosterFieldChange(
-                                      student.studentId,
-                                      "lastName",
-                                      event.target.value
-                                    )
-                                  }
-                                  placeholder="Last name"
-                                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#003366]"
-                                />
-                                <input
-                                  type="text"
-                                  value={draft.firstName}
-                                  onChange={(event) =>
-                                    handleRosterFieldChange(
-                                      student.studentId,
-                                      "firstName",
-                                      event.target.value
-                                    )
-                                  }
-                                  placeholder="First name"
-                                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#003366]"
-                                />
-                                <input
-                                  type="text"
-                                  value={draft.middleName}
-                                  onChange={(event) =>
-                                    handleRosterFieldChange(
-                                      student.studentId,
-                                      "middleName",
-                                      event.target.value
-                                    )
-                                  }
-                                  placeholder="Middle name"
-                                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#003366]"
-                                />
-                              </div>
-                            ) : (
-                              buildStudentName(student)
-                            )}
+                            {buildStudentName(student)}
                           </td>
                           <td className="px-4 py-3 text-slate-600">
-                            {isEditingRoster ? (
-                              <select
-                                value={draft.sex}
-                                onChange={(event) =>
-                                  handleRosterFieldChange(
-                                    student.studentId,
-                                    "sex",
-                                    event.target.value
-                                  )
-                                }
-                                className="w-full min-w-28 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#003366]"
-                              >
-                                <option value="">Sex</option>
-                                <option value="Male">Male</option>
-                                <option value="Female">Female</option>
-                              </select>
-                            ) : (
-                              student.sex || "--"
-                            )}
+                            {student.sex || "--"}
                           </td>
                           <td className="px-4 py-3">
                             <select
-                              value={isEditingRoster ? draft.sectionCode : student.sectionCode || ""}
+                              value={student.sectionCode || ""}
                               onChange={(event) =>
-                                isEditingRoster
-                                  ? handleRosterFieldChange(
-                                      student.studentId,
-                                      "sectionCode",
-                                      event.target.value
-                                    )
-                                  : isRegistrarMode
+                                isRegistrarMode
                                   ? handleMoveStudent(
                                       student.studentId,
                                       event.target.value
@@ -3156,9 +2851,7 @@ function RegistrarStudentSectioning({
                             </select>
                           </td>
                           <td className="px-4 py-3">
-                            {isEditingRoster ? (
-                              <span className="text-sm text-slate-400">Editing</span>
-                            ) : isRegistrarMode ? (
+                            {isRegistrarMode ? (
                               <button
                                 type="button"
                                 onClick={() => handleStartRemoveStudent(student)}
@@ -3171,8 +2864,7 @@ function RegistrarStudentSectioning({
                             )}
                           </td>
                         </tr>
-                      );
-                      })
+                      ))
                     ) : (
                       <tr>
                         <td colSpan="5" className="py-8 text-center text-slate-500">
