@@ -1,0 +1,368 @@
+name: TDD Full-Stack CI
+
+on:
+  push:
+    branches: [staging, testing]
+
+  pull_request:
+    branches: [staging, testing]
+
+  workflow_dispatch:
+    inputs:
+      run_full_smoke:
+        description: "Run full-stack smoke test using Docker Postgres and middleware integration tests"
+        required: false
+        default: "yes"
+        type: choice
+        options:
+          - "no"
+          - "yes"
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      CI: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # =========================
+      # Go / Chaincode
+      # =========================
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20"
+
+      - name: Run chaincode Go unit tests
+        run: |
+          if [ -d "./chaincode" ] && [ -f "./chaincode/go.mod" ]; then
+            cd ./chaincode
+            go test ./... -v
+          else
+            echo "No chaincode/go.mod found. Skipping Go tests."
+          fi
+
+      # =========================
+      # .NET / Backend
+      # =========================
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Run C# backend tests
+        run: |
+          if [ ! -d "./client-app" ]; then
+            echo "client-app directory not found. Skipping .NET tests."
+            exit 0
+          fi
+
+          cd ./client-app
+
+          solution="$(find . -type f -name '*.sln' -print -quit)"
+
+          if [ -n "$solution" ]; then
+            echo "Using solution: $solution"
+            dotnet restore "$solution"
+            dotnet test "$solution" --no-restore --verbosity minimal
+            exit 0
+          fi
+
+          projects="$(find . -type f -name '*.csproj')"
+
+          if [ -z "$projects" ]; then
+            echo "No .NET solution or projects found. Skipping."
+            exit 0
+          fi
+
+          while IFS= read -r project; do
+            echo "Testing project: $project"
+            dotnet test "$project" --verbosity minimal
+          done <<< "$projects"
+
+      # =========================
+      # Node / Middleware
+      # =========================
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install and test middleware
+        run: |
+          if [ ! -f "./middleware/package.json" ]; then
+            echo "No middleware/package.json found. Skipping."
+            exit 0
+          fi
+
+          cd ./middleware
+
+          npm ci --no-audit
+
+          if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)"; then
+            npm test --silent
+          else
+            echo "No middleware test script defined."
+          fi
+
+      # =========================
+      # Node / Frontend
+      # =========================
+
+      - name: Install and test frontend
+        run: |
+          if [ ! -f "./frontend/package.json" ]; then
+            echo "No frontend/package.json found. Skipping."
+            exit 0
+          fi
+
+          cd ./frontend
+
+          npm ci --no-audit
+
+          if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)"; then
+            npm test --silent
+          else
+            echo "No frontend test script defined."
+          fi
+
+
+  full-stack-smoke:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+
+    if: github.event_name != 'workflow_dispatch' || inputs.run_full_smoke == 'yes'
+
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # =========================
+      # Prerequisites
+      # =========================
+
+      - name: Install system prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq openssl
+
+          docker --version
+          jq --version
+          openssl version
+
+      # =========================
+      # PostgreSQL
+      # =========================
+
+      - name: Start PostgreSQL
+        run: |
+          docker run \
+            --name blockgo-postgres \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=ci-postgres-pass \
+            -e POSTGRES_DB=ActivityLogs \
+            -p 5432:5432 \
+            --health-cmd="pg_isready -U postgres -d ActivityLogs" \
+            --health-interval=2s \
+            --health-timeout=3s \
+            --health-retries=30 \
+            -d postgres:13
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in {1..40}; do
+            status="$(docker inspect \
+              --format='{{.State.Health.Status}}' \
+              blockgo-postgres 2>/dev/null || echo starting)"
+
+            echo "Postgres health attempt $i -> $status"
+
+            if [ "$status" = "healthy" ]; then
+              echo "PostgreSQL is ready."
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "PostgreSQL failed to become healthy."
+
+          docker logs blockgo-postgres || true
+
+          exit 1
+
+      # =========================
+      # Fabric CA test certificates
+      # =========================
+
+      - name: Prepare network environment and test certificates
+        run: |
+          mkdir -p network/fabric-ca/registrar
+          mkdir -p network/fabric-ca/faculty
+          mkdir -p network/fabric-ca/department
+
+          openssl req \
+            -x509 \
+            -newkey rsa:2048 \
+            -sha256 \
+            -nodes \
+            -keyout /tmp/ci-ca-key.pem \
+            -out /tmp/ci-ca-cert.pem \
+            -days 1 \
+            -subj "/CN=blockgo-ci-ca"
+
+          cp /tmp/ci-ca-cert.pem \
+            network/fabric-ca/registrar/ca-cert.pem
+
+          cp /tmp/ci-ca-cert.pem \
+            network/fabric-ca/faculty/ca-cert.pem
+
+          cp /tmp/ci-ca-cert.pem \
+            network/fabric-ca/department/ca-cert.pem
+
+          cat > network/.env <<EOF
+          POSTGRES_USER=postgres
+          POSTGRES_PASS=ci-postgres-pass
+          POSTGRES_DB=ActivityLogs
+          POSTGRES_HOST=127.0.0.1
+          POSTGRES_PORT=5432
+
+          JWT_SECRET=ci-test-jwt-secret-which-is-long
+          INTERNAL_API_KEY=ci-internal-key
+
+          BOOTSTRAP_REGISTRAR_PASS=admin123
+          MOCK_REGISTRAR_PASS=admin123
+
+          IPFS_ENCRYPTION_KEY=01234567890123456789012345678901
+
+          FABRIC_CA_REGISTRAR_CERT=${GITHUB_WORKSPACE}/network/fabric-ca/registrar/ca-cert.pem
+          FABRIC_CA_FACULTY_CERT=${GITHUB_WORKSPACE}/network/fabric-ca/faculty/ca-cert.pem
+          FABRIC_CA_DEPARTMENT_CERT=${GITHUB_WORKSPACE}/network/fabric-ca/department/ca-cert.pem
+
+          FABRIC_CA_INSECURE_TLS=true
+          EOF
+
+      # =========================
+      # Middleware
+      # =========================
+
+      - name: Install middleware dependencies
+        working-directory: ./middleware
+        run: npm ci --no-audit
+
+      - name: Start middleware
+        working-directory: ./middleware
+
+        env:
+          NODE_ENV: test
+
+          JWT_SECRET: ci-test-jwt-secret-which-is-long
+          INTERNAL_API_KEY: ci-internal-key
+
+          POSTGRES_USER: postgres
+          POSTGRES_PASS: ci-postgres-pass
+          POSTGRES_DB: ActivityLogs
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: "5432"
+
+          BOOTSTRAP_REGISTRAR_PASS: admin123
+          MOCK_REGISTRAR_PASS: admin123
+
+          IPFS_ENCRYPTION_KEY: 01234567890123456789012345678901
+
+          FABRIC_CA_REGISTRAR_CERT: ${{ github.workspace }}/network/fabric-ca/registrar/ca-cert.pem
+          FABRIC_CA_FACULTY_CERT: ${{ github.workspace }}/network/fabric-ca/faculty/ca-cert.pem
+          FABRIC_CA_DEPARTMENT_CERT: ${{ github.workspace }}/network/fabric-ca/department/ca-cert.pem
+
+          FABRIC_CA_INSECURE_TLS: "true"
+
+        run: |
+          nohup node middleware.js > /tmp/middleware.log 2>&1 &
+
+          echo $! > /tmp/middleware.pid
+
+      # =========================
+      # Health check
+      # =========================
+
+      - name: Wait for middleware health
+        run: |
+          URL="http://localhost:4000/api/health"
+
+          for i in {1..40}; do
+            code="$(curl \
+              -s \
+              -o /dev/null \
+              -w "%{http_code}" \
+              "$URL" || true)"
+
+            echo "Health check attempt $i -> $code"
+
+            if [ "$code" = "200" ]; then
+              echo "Middleware is healthy."
+              exit 0
+            fi
+
+            sleep 3
+          done
+
+          echo "Middleware health check failed."
+
+          echo "========== MIDDLEWARE LOG =========="
+          cat /tmp/middleware.log || true
+
+          exit 1
+
+      # =========================
+      # Integration tests
+      # =========================
+
+      - name: Run API integration tests
+        env:
+          INTERNAL_API_KEY: ci-internal-key
+          MOCK_REGISTRAR_PASS: admin123
+
+        run: |
+          if [ ! -f ".github/scripts/api-integration-tests.sh" ]; then
+            echo "Integration test script not found."
+            exit 1
+          fi
+
+          if ! bash .github/scripts/api-integration-tests.sh; then
+            echo "API integration tests failed."
+
+            echo "========== MIDDLEWARE LOG =========="
+            cat /tmp/middleware.log || true
+
+            exit 1
+          fi
+
+      # =========================
+      # Cleanup
+      # =========================
+
+      - name: Tear down test environment
+        if: always()
+
+        run: |
+          if [ -f /tmp/middleware.pid ]; then
+            kill "$(cat /tmp/middleware.pid)" || true
+          fi
+
+          docker rm -f blockgo-postgres || true
+
+          echo "========== FINAL MIDDLEWARE LOG =========="
+          cat /tmp/middleware.log || true
