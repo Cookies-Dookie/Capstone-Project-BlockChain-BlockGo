@@ -1,13 +1,3 @@
-const configuredCAConnectionTimeout = Number.parseInt(
-    process.env.FABRIC_CA_CONNECTION_TIMEOUT_MS || process.env.CONNECTION_TIMEOUT,
-    10
-);
-process.env.CONNECTION_TIMEOUT = String(
-    Number.isFinite(configuredCAConnectionTimeout) && configuredCAConnectionTimeout > 0
-        ? configuredCAConnectionTimeout
-        : 30000
-);
-
 const FabricCAServices = require('fabric-ca-client');
 const express = require('express');
 const jwt = require('jsonwebtoken');
@@ -16,9 +6,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const { Gateway, Wallets } = require('fabric-network');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const v8 = require('v8');
 require('dotenv').config();
 require('dotenv').config({ path: path.resolve(__dirname, '../network/.env'), override: true });
 const multer = require('multer');
@@ -30,30 +18,12 @@ const scryptAsync = util.promisify(crypto.scrypt);
 
 require('events').EventEmitter.defaultMaxListeners = 100;
 
-const parsePositiveInt = (value, fallback) => {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-};
-
-const managedIntervals = new Set();
-const setManagedInterval = (handler, intervalMs) => {
-    const timer = setInterval(handler, intervalMs);
-    if (typeof timer.unref === 'function') timer.unref();
-    managedIntervals.add(timer);
-    return timer;
-};
-
-const clearManagedIntervals = () => {
-    for (const timer of managedIntervals) clearInterval(timer);
-    managedIntervals.clear();
-};
-
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-setManagedInterval(() => {
+setInterval(() => {
     fs.readdir(uploadDir, (err, files) => {
         if (err) return;
         const now = Date.now();
@@ -75,16 +45,20 @@ setManagedInterval(() => {
 
 const caConfigCache = new Map();
 
-const GATEWAY_CACHE_MAX_USERS = parsePositiveInt(process.env.GATEWAY_CACHE_MAX_USERS, 500);
+global.userGatewayCache = global.userGatewayCache || new Map();
+const userGatewayCache = global.userGatewayCache;
+
+const parsePositiveInt = (value, fallback) => {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const IDLE_TIMEOUT_MS = parsePositiveInt(process.env.GATEWAY_IDLE_TIMEOUT_MS, 5 * 60 * 1000);
 const GATEWAY_PRUNE_INTERVAL_MS = parsePositiveInt(process.env.GATEWAY_PRUNE_INTERVAL_MS, 60 * 1000);
-const CA_CONFIG_TTL_MS = parsePositiveInt(process.env.CA_CONFIG_TTL_MS, 60 * 60 * 1000);
-const CA_CONFIG_PRUNE_INTERVAL_MS = parsePositiveInt(process.env.CA_CONFIG_PRUNE_INTERVAL_MS, 10 * 60 * 1000);
-const SHUTDOWN_GRACE_MS = parsePositiveInt(process.env.SHUTDOWN_GRACE_MS, 30 * 1000);
-let isShuttingDown = false;
 
-const disconnectGatewayEntry = (username, cached, reason = 'stale') => {
-    if (!cached?.gateway) return;
+const disconnectCachedGateway = (username, reason = 'stale') => {
+    const cached = userGatewayCache.get(username);
+    if (!cached) return;
 
     try {
         cached.gateway.disconnect();
@@ -92,89 +66,8 @@ const disconnectGatewayEntry = (username, cached, reason = 'stale') => {
         console.warn(`[Gateway Cache] Failed to disconnect ${username}: ${e.message}`);
     }
 
-    console.log(`[Gateway Cache] Closed ${reason} gateway for ${username}`);
-};
-
-class GatewayLRUCache {
-    constructor(maxEntries, initialEntries) {
-        this.maxEntries = Math.max(1, maxEntries);
-        this.store = new Map();
-
-        if (initialEntries && typeof initialEntries.entries === 'function') {
-            for (const [username, cached] of initialEntries.entries()) {
-                this.set(username, cached);
-            }
-        }
-    }
-
-    get size() {
-        return this.store.size;
-    }
-
-    has(username) {
-        return this.store.has(username);
-    }
-
-    get(username) {
-        const cached = this.store.get(username);
-        if (!cached) return undefined;
-
-        this.store.delete(username);
-        this.store.set(username, cached);
-        return cached;
-    }
-
-    set(username, cached) {
-        const existing = this.store.get(username);
-        if (existing && existing.gateway !== cached.gateway) {
-            disconnectGatewayEntry(username, existing, 'replaced');
-        }
-
-        this.store.delete(username);
-        this.store.set(username, cached);
-        this.evictOverflow();
-        return this;
-    }
-
-    delete(username) {
-        return this.store.delete(username);
-    }
-
-    entries() {
-        return this.store.entries();
-    }
-
-    forEach(callback) {
-        this.store.forEach(callback);
-    }
-
-    clear() {
-        this.store.clear();
-    }
-
-    evictOverflow() {
-        while (this.store.size > this.maxEntries) {
-            const oldest = this.store.entries().next().value;
-            if (!oldest) return;
-
-            const [username, cached] = oldest;
-            this.store.delete(username);
-            disconnectGatewayEntry(username, cached, 'capacity');
-        }
-    }
-}
-
-global.userGatewayCache = global.userGatewayCache instanceof GatewayLRUCache
-    ? global.userGatewayCache
-    : new GatewayLRUCache(GATEWAY_CACHE_MAX_USERS, global.userGatewayCache);
-const userGatewayCache = global.userGatewayCache;
-
-const disconnectCachedGateway = (username, reason = 'stale') => {
-    const cached = userGatewayCache.get(username);
-    if (!cached) return;
-
     userGatewayCache.delete(username);
-    disconnectGatewayEntry(username, cached, reason);
+    console.log(`[Gateway Cache] Closed ${reason} gateway for ${username}`);
 };
 
 const isGatewayCacheExpired = (cached) => {
@@ -182,7 +75,7 @@ const isGatewayCacheExpired = (cached) => {
     return Date.now() - cached.lastAccessed > IDLE_TIMEOUT_MS;
 };
 
-setManagedInterval(() => {
+setInterval(() => {
     for (const [username, cached] of userGatewayCache.entries()) {
         if (isGatewayCacheExpired(cached)) disconnectCachedGateway(username, 'idle');
     }
@@ -203,90 +96,18 @@ const resolveExistingPaths = (...candidates) => {
     return paths;
 };
 
-const resolveFirstExistingPath = (...candidates) => {
-    for (const candidate of candidates.filter(Boolean)) {
-        const resolved = path.resolve(__dirname, candidate);
-        if (fs.existsSync(resolved)) return resolved;
-    }
-    return null;
-};
-
-const readFirstExistingFile = (...candidates) => {
-    const resolved = resolveFirstExistingPath(...candidates);
-    return resolved ? fs.readFileSync(resolved, 'utf8') : '';
-};
-
-let ccp = null;
-const ccpPath = resolveFirstExistingPath(
-    process.env.CONNECTION_PROFILE_PATH,
-    path.resolve(__dirname, '..', 'network', 'connection-profile.json'),
-    path.resolve(__dirname, 'connection.json')
-);
-const ADMIN_CRYPTO_BASE = process.env.ADMIN_CRYPTO_BASE || '/etc/hyperledger/admin-crypto';
-const FABRIC_GATEWAY_TLS_ROOTS = process.env.FABRIC_GATEWAY_TLS_ROOTS || '/etc/hyperledger/fabric-gateway-tls';
-
 const getFileSignature = (filePath) => {
     const stat = fs.statSync(filePath);
     return `${filePath}:${stat.mtimeMs}:${stat.size}`;
 };
 
-const getCachedCAConfig = (cacheKey) => {
-    const cached = caConfigCache.get(cacheKey);
-    if (!cached) return null;
-
-    if (Date.now() - cached.createdAt > CA_CONFIG_TTL_MS) {
-        caConfigCache.delete(cacheKey);
-        console.log(`[Fabric CA Cache] Evicted expired config ${cacheKey}`);
-        return null;
-    }
-
-    cached.lastAccessed = Date.now();
-    return cached.config;
-};
-
-const pruneCAConfigCache = () => {
-    const now = Date.now();
-    for (const [cacheKey, cached] of caConfigCache.entries()) {
-        if (now - cached.createdAt > CA_CONFIG_TTL_MS) {
-            caConfigCache.delete(cacheKey);
-            console.log(`[Fabric CA Cache] Evicted stale config ${cacheKey}`);
-        }
-    }
-};
-
-setManagedInterval(pruneCAConfigCache, CA_CONFIG_PRUNE_INTERVAL_MS);
-
-const normalizeDatabaseRole = (role) => {
-    const normalizedRole = String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-
-    if (['system_admin', 'systemadmin', 'system_administrator', 'systemadministrator'].includes(normalizedRole)) {
-        return 'system_admin';
-    }
-    if (['department_admin', 'dept_admin', 'deptadmin', 'departmentadmin', 'department', 'admin', 'departmentmsp', 'chairperson'].includes(normalizedRole)) {
-        return 'department_admin';
-    }
-    if (normalizedRole === 'facultymsp') return 'faculty';
-    if (normalizedRole === 'registrarmsp') return 'registrar';
-
-    return normalizedRole;
-};
-
 const getCAConfig = (role) => {
-<<<<<<< Updated upstream
     const normalizedRole = String(role || 'registrar').toLowerCase();
-    const isDocker = fs.existsSync('/.dockerenv');
-=======
-    const normalizedRole = normalizeDatabaseRole(role || 'registrar');
     const isContainerized = fs.existsSync('/.dockerenv') || fs.existsSync('/var/run/secrets/kubernetes.io');
->>>>>>> Stashed changes
     let caURL, caName, adminLabel, mspId, certPaths, cacheKey;
 
-    if (normalizedRole === 'system_admin') {
-        throw new Error('System administrator accounts do not have Fabric CA identities.');
-    }
-
     if (normalizedRole === 'faculty') {
-        caURL = isDocker ? 'https://ca.faculty.capstone.com:7054' : 'https://localhost:8054';
+        caURL = process.env.FABRIC_CA_FACULTY_URL || (isContainerized ? 'https://ca.faculty.capstone.com:7054' : 'https://localhost:8054');
         caName = 'ca-faculty';
         adminLabel = 'admin-faculty';
         mspId = 'FacultyMSP';
@@ -296,13 +117,8 @@ const getCAConfig = (role) => {
             '../network/crypto-config-final-v2/peerOrganizations/faculty.capstone.com/tlsca/tlsca.faculty.capstone.com-cert.pem',
             '../network/fabric-ca/faculty/tls-cert.pem'
         );
-<<<<<<< Updated upstream
     } else if (normalizedRole === 'department_admin' || normalizedRole === 'admin' || normalizedRole === 'deptadmin' || normalizedRole === 'department' || normalizedRole === 'chairperson') {
-        caURL = isDocker ? 'https://ca.department.capstone.com:7054' : 'https://localhost:9054';
-=======
-    } else if (normalizedRole === 'department_admin') {
         caURL = process.env.FABRIC_CA_DEPARTMENT_URL || (isContainerized ? 'https://ca.department.capstone.com:7054' : 'https://localhost:9054');
->>>>>>> Stashed changes
         caName = 'ca-department';
         adminLabel = 'admin-department';
         mspId = 'DepartmentMSP';
@@ -312,13 +128,8 @@ const getCAConfig = (role) => {
             '../network/crypto-config-final-v2/peerOrganizations/department.capstone.com/tlsca/tlsca.department.capstone.com-cert.pem',
             '../network/fabric-ca/department/tls-cert.pem'
         );
-<<<<<<< Updated upstream
     } else {
-        caURL = isDocker ? 'https://ca.registrar.capstone.com:7054' : 'https://localhost:7054';
-=======
-    } else if (normalizedRole === 'registrar' || normalizedRole === 'student') {
         caURL = process.env.FABRIC_CA_REGISTRAR_URL || (isContainerized ? 'https://ca.registrar.capstone.com:7054' : 'https://localhost:7054');
->>>>>>> Stashed changes
         caName = 'ca-registrar';
         adminLabel = 'admin-registrar';
         mspId = 'RegistrarMSP';
@@ -328,47 +139,32 @@ const getCAConfig = (role) => {
             '../network/crypto-config-final-v2/peerOrganizations/registrar.capstone.com/tlsca/tlsca.registrar.capstone.com-cert.pem',
             '../network/fabric-ca/registrar/tls-cert.pem'
         );
-    } else {
-        throw new Error(`Unsupported Fabric role "${normalizedRole || 'unknown'}".`);
     }
 
     if (!certPaths || certPaths.length === 0) {
-        throw new Error(`Fabric CA trust certificate was not found for role "${role}". Run full_deploy.sh so fabric-ca/*/ca-cert.pem and tls-cert.pem are generated.`);
+        if (isContainerized) {
+            console.warn(`[Fabric CA] No local TLS certs found for ${role}. Disabling strict TLS verification for internal K8s cluster routing.`);
+        } else {
+            throw new Error(`Fabric CA trust certificate was not found for role "${role}". Run full_deploy.sh so fabric-ca/*/ca-cert.pem and tls-cert.pem are generated.`);
+        }
     }
 
-<<<<<<< Updated upstream
-    cacheKey = `${normalizedRole}:${certPaths.map(getFileSignature).join('|')}`;
+    cacheKey = `${normalizedRole}:${(certPaths || []).map(getFileSignature).join('|')}`;
     if (caConfigCache.has(cacheKey)) {
         return caConfigCache.get(cacheKey);
-=======
-    cacheKey = `${normalizedRole}:${(certPaths || []).map(getFileSignature).join('|')}`;
-    const cachedConfig = getCachedCAConfig(cacheKey);
-    if (cachedConfig) {
-        return cachedConfig;
->>>>>>> Stashed changes
     }
 
-    const allowInsecureTLS = process.env.FABRIC_CA_INSECURE_TLS === 'true';
     const tlsOptions = {
-<<<<<<< Updated upstream
-        trustedRoots: certPaths.map((certPath) => fs.readFileSync(certPath, 'utf8')),
-        verify: true
-=======
         trustedRoots: certPaths ? certPaths.map((certPath) => fs.readFileSync(certPath, 'utf8')) : [],
-        verify: !allowInsecureTLS && certPaths && certPaths.length > 0
->>>>>>> Stashed changes
+        verify: certPaths && certPaths.length > 0
     };
-
-    if (allowInsecureTLS) {
-        console.warn(`[Fabric CA TLS] Hostname verification is disabled for ${caName}. Do not enable FABRIC_CA_INSECURE_TLS in production.`);
-    }
 
     const caClient = new FabricCAServices(caURL, tlsOptions, caName);
 
     console.log(`[Fabric CA TLS] ${caName} trust roots: ${certPaths.map((certPath) => path.basename(path.dirname(certPath)) + '/' + path.basename(certPath)).join(', ')}`);
 
     const config = { caURL, caName, adminLabel, mspId, certPaths, tlsOptions, caClient };
-    caConfigCache.set(cacheKey, { config, createdAt: Date.now(), lastAccessed: Date.now() });
+    caConfigCache.set(cacheKey, config);
     return config;
 };
 
@@ -415,130 +211,6 @@ app.use((req, res, next) => {
     next();
 });
 
-const HTTP_DURATION_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
-const httpRequestStats = new Map();
-
-const normalizeMetricPath = (req) => {
-    if (req.route?.path) {
-        return Array.isArray(req.route.path) ? req.route.path.join('|') : String(req.route.path);
-    }
-
-    return req.path
-        .replace(/[0-9a-fA-F]{8,}/g, ':id')
-        .replace(/\b\d+\b/g, ':id');
-};
-
-const getHttpMetric = (method, route, statusCode) => {
-    const status = String(statusCode);
-    const key = JSON.stringify({ method, route, status });
-    let metric = httpRequestStats.get(key);
-
-    if (!metric) {
-        metric = {
-            method,
-            route,
-            status,
-            count: 0,
-            sum: 0,
-            buckets: HTTP_DURATION_BUCKETS.map((le) => ({ le, count: 0 })),
-            inf: 0
-        };
-        httpRequestStats.set(key, metric);
-    }
-
-    return metric;
-};
-
-const observeHttpRequest = (req, res, durationSeconds) => {
-    const metric = getHttpMetric(req.method, normalizeMetricPath(req), res.statusCode);
-    metric.count += 1;
-    metric.sum += durationSeconds;
-    metric.inf += 1;
-
-    for (const bucket of metric.buckets) {
-        if (durationSeconds <= bucket.le) bucket.count += 1;
-    }
-};
-
-app.use((req, res, next) => {
-    if (req.path === '/metrics') return next();
-
-    const start = process.hrtime.bigint();
-    res.on('finish', () => {
-        const durationSeconds = Number(process.hrtime.bigint() - start) / 1e9;
-        observeHttpRequest(req, res, durationSeconds);
-    });
-    next();
-});
-
-const escapeMetricLabel = (value) => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-const metricLabels = (labels) => Object.entries(labels)
-    .map(([key, value]) => `${key}="${escapeMetricLabel(value)}"`)
-    .join(',');
-
-const renderPrometheusMetrics = () => {
-    const memory = process.memoryUsage();
-    const lines = [
-        '# HELP process_resident_memory_bytes Resident memory size in bytes.',
-        '# TYPE process_resident_memory_bytes gauge',
-        `process_resident_memory_bytes ${memory.rss}`,
-        '# HELP nodejs_heap_size_total_bytes Total V8 heap size in bytes.',
-        '# TYPE nodejs_heap_size_total_bytes gauge',
-        `nodejs_heap_size_total_bytes ${memory.heapTotal}`,
-        '# HELP nodejs_heap_size_used_bytes Used V8 heap size in bytes.',
-        '# TYPE nodejs_heap_size_used_bytes gauge',
-        `nodejs_heap_size_used_bytes ${memory.heapUsed}`,
-        '# HELP nodejs_external_memory_bytes External memory size in bytes.',
-        '# TYPE nodejs_external_memory_bytes gauge',
-        `nodejs_external_memory_bytes ${memory.external}`,
-        '# HELP process_uptime_seconds Process uptime in seconds.',
-        '# TYPE process_uptime_seconds gauge',
-        `process_uptime_seconds ${process.uptime()}`,
-        '# HELP blockgo_gateway_cache_entries Active cached Fabric gateways.',
-        '# TYPE blockgo_gateway_cache_entries gauge',
-        `blockgo_gateway_cache_entries ${userGatewayCache.size}`,
-        '# HELP blockgo_gateway_cache_max_entries Configured maximum cached Fabric gateways.',
-        '# TYPE blockgo_gateway_cache_max_entries gauge',
-        `blockgo_gateway_cache_max_entries ${GATEWAY_CACHE_MAX_USERS}`,
-        '# HELP blockgo_ca_config_cache_entries Cached Fabric CA client configurations.',
-        '# TYPE blockgo_ca_config_cache_entries gauge',
-        `blockgo_ca_config_cache_entries ${caConfigCache.size}`,
-        '# HELP blockgo_managed_interval_count Active managed interval timers.',
-        '# TYPE blockgo_managed_interval_count gauge',
-        `blockgo_managed_interval_count ${managedIntervals.size}`,
-        '# HELP blockgo_shutdown_in_progress Whether the middleware is draining for shutdown.',
-        '# TYPE blockgo_shutdown_in_progress gauge',
-        `blockgo_shutdown_in_progress ${isShuttingDown ? 1 : 0}`,
-        '# HELP http_requests_total Total HTTP requests by method, route, and status.',
-        '# TYPE http_requests_total counter'
-    ];
-
-    for (const metric of httpRequestStats.values()) {
-        const labels = metricLabels({ method: metric.method, route: metric.route, status: metric.status });
-        lines.push(`http_requests_total{${labels}} ${metric.count}`);
-    }
-
-    lines.push(
-        '# HELP http_request_duration_seconds HTTP request duration in seconds.',
-        '# TYPE http_request_duration_seconds histogram'
-    );
-
-    for (const metric of httpRequestStats.values()) {
-        for (const bucket of metric.buckets) {
-            const labels = metricLabels({ method: metric.method, route: metric.route, status: metric.status, le: bucket.le });
-            lines.push(`http_request_duration_seconds_bucket{${labels}} ${bucket.count}`);
-        }
-
-        const infLabels = metricLabels({ method: metric.method, route: metric.route, status: metric.status, le: '+Inf' });
-        const baseLabels = metricLabels({ method: metric.method, route: metric.route, status: metric.status });
-        lines.push(`http_request_duration_seconds_bucket{${infLabels}} ${metric.inf}`);
-        lines.push(`http_request_duration_seconds_count{${baseLabels}} ${metric.count}`);
-        lines.push(`http_request_duration_seconds_sum{${baseLabels}} ${metric.sum}`);
-    }
-
-    return `${lines.join('\n')}\n`;
-};
-
 const dbRead = new Pool({
     user: process.env.POSTGRES_USER || 'postgres',
     host: process.env.POSTGRES_HOST === 'postgres' ? '127.0.0.1' : (process.env.POSTGRES_HOST || '127.0.0.1'),
@@ -554,7 +226,7 @@ if (mainIp === 'host-gateway') mainIp = '127.0.0.1';
 
 const dbWrite = new Pool({
     user: process.env.POSTGRES_USER || 'postgres',
-    host: mainIp || process.env.POSTGRES_HOST || '127.0.0.1',
+    host: process.env.POSTGRES_HOST === 'postgres' ? (mainIp || '127.0.0.1') : (process.env.POSTGRES_HOST || mainIp || '127.0.0.1'),
     database: process.env.POSTGRES_DB || 'ActivityLogs',
     password: process.env.POSTGRES_PASS || 'password',
     port: process.env.POSTGRES_PORT || 5432,
@@ -570,30 +242,24 @@ dbWrite.on('error', (err, client) => {
 });
 async function getWallet(role = 'registrar') {
     if (!role) role = 'registrar';
-    const normalizedRole = normalizeDatabaseRole(role);
+    const normalizedRole = String(role).toLowerCase();
     let couchUrl;
     const user = process.env.COUCHDB_USER || 'capstone';
     const pass = process.env.COUCHDB_PASS || 'pass123';
-    const host = fs.existsSync('/.dockerenv') ? 'host.docker.internal' : '127.0.0.1';
-
-    if (normalizedRole === 'system_admin') {
-        throw new Error('System administrator accounts do not have Fabric wallets.');
-    }
+    const host = (fs.existsSync('/.dockerenv') || fs.existsSync('/var/run/secrets/kubernetes.io')) ? 'host.docker.internal' : '127.0.0.1';
 
     if (normalizedRole === 'faculty') {
         couchUrl = process.env.COUCHDB_WALLET_FACULTY_URL || `http://${user}:${pass}@${host}:6990`;
-    } else if (normalizedRole === 'department_admin') {
+    } else if (normalizedRole === 'department_admin' || normalizedRole === 'deptadmin' || normalizedRole === 'department' || normalizedRole === 'admin' || normalizedRole === 'chairperson') {
         couchUrl = process.env.COUCHDB_WALLET_DEPARTMENT_URL || `http://${user}:${pass}@${host}:7990`;
-    } else if (normalizedRole === 'registrar' || normalizedRole === 'student') {
-        couchUrl = process.env.COUCHDB_WALLET_REGISTRAR_URL || process.env.COUCHDB_WALLET_URL || `http://${user}:${pass}@${host}:5990`;
     } else {
-        throw new Error(`Unsupported Fabric role "${normalizedRole || 'unknown'}".`);
+        couchUrl = process.env.COUCHDB_WALLET_REGISTRAR_URL || process.env.COUCHDB_WALLET_URL || `http://${user}:${pass}@${host}:5990`;
     }
 
     if (couchUrl) {
         const walletSuffix = normalizedRole === 'faculty'
             ? 'faculty'
-            : normalizedRole === 'department_admin'
+            : (normalizedRole === 'department_admin' || normalizedRole === 'deptadmin' || normalizedRole === 'department' || normalizedRole === 'admin' || normalizedRole === 'chairperson')
                 ? 'department'
                 : 'registrar';
         const walletName = `fabric_wallet_${walletSuffix}`;
@@ -666,8 +332,8 @@ if (!JWT_SECRET) {
     console.error("FATAL ERROR: JWT_SECRET environment variable is missing. Please set it in your .env file.");
     process.exit(1);
 }
-// Derive a fixed 32-byte HS256 key from the full configured secret.
-JWT_SECRET = crypto.createHash('sha256').update(JWT_SECRET.trim(), 'utf8').digest();
+// Normalize to exactly 32 bytes to prevent C# ASP.NET Core HS256 minimum key size exceptions (IDX10603)
+JWT_SECRET = JWT_SECRET.trim().padEnd(32, '0').substring(0, 32);
 
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
 if (!INTERNAL_API_KEY) {
@@ -686,13 +352,7 @@ const authenticateJWT = (req, res, next) => {
         const token = authHeader.split(' ')[1];
         jwt.verify(token, JWT_SECRET, (err, user) => {
             if (err) return res.status(403).json({ error: "Invalid or expired token." });
-            const dbRole = normalizeDatabaseRole(user.dbRole);
-            if (dbRole === 'system_admin' || user.role === 'SystemAdmin') {
-                return res.status(403).json({
-                    error: 'System administrator accounts cannot access Fabric or academic middleware operations.'
-                });
-            }
-            req.user = { ...user, dbRole };
+            req.user = user;
             next();
         });
     } else {
@@ -724,15 +384,6 @@ const requireRegistrarOrInternal = (req, res, next) => {
     return res.status(403).json({ 
         error: "Access denied. Cryptographic operations require Registrar privileges or a valid Internal API Key." 
     });
-};
-
-const requireInternalApiKey = (req, res, next) => {
-    if (req.headers['x-api-key'] === INTERNAL_API_KEY) {
-        req.isInternal = true;
-        return next();
-    }
-
-    return res.status(401).json({ error: 'Invalid or missing Internal API Key.' });
 };
 
 const clearCacheOnError = async (username, error) => {
@@ -772,9 +423,9 @@ async function importCryptogenAdmins() {
     console.log("Syncing natively trusted Cryptogen Admin certificates...");
     try {
         const orgs = [
-            { mspId: 'RegistrarMSP', domain: 'registrar.capstone.com', label: 'system-admin-registrar', role: 'registrar', secretDir: 'registrar' },
-            { mspId: 'FacultyMSP', domain: 'faculty.capstone.com', label: 'system-admin-faculty', role: 'faculty', secretDir: 'faculty' },
-            { mspId: 'DepartmentMSP', domain: 'department.capstone.com', label: 'system-admin-department', role: 'department_admin', secretDir: 'department' }
+            { mspId: 'RegistrarMSP', domain: 'registrar.capstone.com', label: 'system-admin-registrar', role: 'registrar' },
+            { mspId: 'FacultyMSP', domain: 'faculty.capstone.com', label: 'system-admin-faculty', role: 'faculty' },
+            { mspId: 'DepartmentMSP', domain: 'department.capstone.com', label: 'system-admin-department', role: 'department_admin' }
         ];
 
         const cryptoBase = '../network/crypto-config-final-v2';
@@ -782,22 +433,6 @@ async function importCryptogenAdmins() {
         for (const org of orgs) {
             try {
                 const wallet = await getWallet(org.role);
-                const mountedCertPath = path.join(ADMIN_CRYPTO_BASE, org.secretDir, 'msp-cert.pem');
-                const mountedKeyPath = path.join(ADMIN_CRYPTO_BASE, org.secretDir, 'msp-key.pem');
-
-                if (fs.existsSync(mountedCertPath) && fs.existsSync(mountedKeyPath)) {
-                    const cert = fs.readFileSync(mountedCertPath, 'utf8');
-                    const key = fs.readFileSync(mountedKeyPath, 'utf8');
-
-                    await wallet.put(org.label, {
-                        credentials: { certificate: cert, privateKey: key },
-                        mspId: org.mspId,
-                        type: 'X.509'
-                    });
-                    console.log(`[Identity Sync] Imported ${org.label} from mounted K8s secret.`);
-                    continue;
-                }
-
                 let certPath = path.resolve(__dirname, `${cryptoBase}/peerOrganizations/${org.domain}/users/Admin@${org.domain}/msp/signcerts/Admin@${org.domain}-cert.pem`);
                 
                 if (!fs.existsSync(certPath)) {
@@ -809,7 +444,7 @@ async function importCryptogenAdmins() {
                 if (fs.existsSync(certPath) && fs.existsSync(keyDir)) {
                     const cert = fs.readFileSync(certPath, 'utf8');
                     
-                    const keyFiles = fs.readdirSync(keyDir).filter(f => f.endsWith('_sk') || f === 'priv_sk');
+                    const keyFiles = fs.readdirSync(keyDir).filter(f => f.endsWith('_sk'));
                     
                     if (keyFiles.length > 0) {
                         const keyPath = path.join(keyDir, keyFiles[0]);
@@ -855,15 +490,7 @@ async function ensureAdminEnrolled(caURL, caName, mspId, adminLabel, tlsOptions,
 
         console.log(`[Identity Guard] '${adminLabel}' missing from wallet. Attempting enrollment...`);
         
-        const enrollSecret =
-            role === 'faculty'
-                ? process.env.FABRIC_CA_FACULTY_PASS
-                : role === 'department_admin'
-                    ? process.env.FABRIC_CA_DEPARTMENT_PASS
-                    : (process.env.BOOTSTRAP_REGISTRAR_PASSWORD || process.env.BOOTSTRAP_REGISTRAR_PASS || process.env.FABRIC_CA_REGISTRAR_PASS);
-        if (!enrollSecret) {
-            throw new Error(`Missing Fabric CA admin enrollment secret for ${role}.`);
-        }
+        const enrollSecret = process.env.BOOTSTRAP_REGISTRAR_PASS || 'adminpw';
         
         const ca = caClient || new FabricCAServices(caURL, tlsOptions, caName);
         
@@ -905,16 +532,8 @@ async function getContractForUser(username, roleHint) {
         }
     }
 
-    if (!ccp) {
-        console.log('[Ledger Gateway] Connection profile not cached. Reading from disk...');
-        if (!ccpPath) {
-            throw new Error('Connection profile not found. Set CONNECTION_PROFILE_PATH or include middleware/connection.json in the image.');
-        }
-        ccp = JSON.parse(fs.readFileSync(ccpPath, 'utf8'));
-    }
-
-    // Deep copy the CCP to prevent race conditions when modifying it for different user contexts.
-    const ccpForUser = JSON.parse(JSON.stringify(ccp));
+    const ccpPath = path.resolve(__dirname, '..', 'network', 'connection-profile.json');
+    const ccp = JSON.parse(fs.readFileSync(ccpPath, 'utf8'));
     
     let wallet = await getWallet(roleHint);
     let identity = await wallet.get(username);
@@ -932,7 +551,7 @@ async function getContractForUser(username, roleHint) {
     }
 
     let clientOrgName = null;
-    for (const [orgName, orgDetails] of Object.entries(ccpForUser.organizations)) {
+    for (const [orgName, orgDetails] of Object.entries(ccp.organizations)) {
         if (orgDetails.mspid === identity.mspId) {
             clientOrgName = orgName;
             break;
@@ -945,64 +564,42 @@ async function getContractForUser(username, roleHint) {
 
     console.log(`[Ledger Gateway] Routing transaction for ${username} via organization "${clientOrgName}"`);
 
-    if (!ccpForUser.client) ccpForUser.client = {};
-    ccpForUser.client.organization = clientOrgName;
+    if (!ccp.client) ccp.client = {};
+    ccp.client.organization = clientOrgName;
 
-<<<<<<< Updated upstream
-    // Inject full network routing to bypass broken Docker Service Discovery on localhost
-    if (!fs.existsSync('/.dockerenv')) {
+    const isContainerized = fs.existsSync('/.dockerenv') || fs.existsSync('/var/run/secrets/kubernetes.io');
+    // Inject full network routing to bypass broken Service Discovery on localhost
+    if (!isContainerized) {
         const getPEM = (org, peer) => {
             try { return fs.readFileSync(path.resolve(__dirname, `../network/crypto-config-final-v2/peerOrganizations/${org}/peers/${peer}/tls/ca.crt`), 'utf8'); } catch(e) { return ""; }
         };
         const getOrdererPEM = () => {
             try { return fs.readFileSync(path.resolve(__dirname, `../network/crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/ca.crt`), 'utf8'); } catch(e) { return ""; }
         };
-=======
-    const isContainerized = fs.existsSync('/.dockerenv') || fs.existsSync('/var/run/secrets/kubernetes.io');
->>>>>>> Stashed changes
 
-    // Explicitly map the gossip domains to their actual internal IPs / K8s DNS to bypass broken Service Discovery
-    const getPEM = (org, peer) => {
-        const mountedRootName = {
-            'registrar.capstone.com': 'registrar-peer-ca.crt',
-            'faculty.capstone.com': 'faculty-peer-ca.crt',
-            'department.capstone.com': 'department-peer-ca.crt'
-        }[org];
+        ccp.peers = {
+            ...ccp.peers,
+            'peer0.registrar.capstone.com': { url: 'grpcs://localhost:7051', tlsCACerts: { pem: getPEM('registrar.capstone.com', 'peer0.registrar.capstone.com') }, grpcOptions: { 'ssl-target-name-override': 'peer0.registrar.capstone.com' } },
+            'peer0.faculty.capstone.com': { url: 'grpcs://localhost:9051', tlsCACerts: { pem: getPEM('faculty.capstone.com', 'peer0.faculty.capstone.com') }, grpcOptions: { 'ssl-target-name-override': 'peer0.faculty.capstone.com' } },
+            'peer0.department.capstone.com': { url: 'grpcs://localhost:11051', tlsCACerts: { pem: getPEM('department.capstone.com', 'peer0.department.capstone.com') }, grpcOptions: { 'ssl-target-name-override': 'peer0.department.capstone.com' } }
+        };
 
-        return readFirstExistingFile(
-            mountedRootName ? path.join(FABRIC_GATEWAY_TLS_ROOTS, mountedRootName) : null,
-            `../network/crypto-config-final-v2/peerOrganizations/${org}/peers/${peer}/tls/ca.crt`
-        );
-    };
-    const getOrdererPEM = () => {
-        return readFirstExistingFile(
-            path.join(FABRIC_GATEWAY_TLS_ROOTS, 'orderer-ca.crt'),
-            '../network/crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/ca.crt'
-        );
-    };
+        ccp.orderers = {
+            ...ccp.orderers,
+            'orderer.capstone.com': { url: 'grpcs://localhost:7050', tlsCACerts: { pem: getOrdererPEM() }, grpcOptions: { 'ssl-target-name-override': 'orderer.capstone.com' } }
+        };
 
-    ccpForUser.peers = {
-        ...ccpForUser.peers,
-        'peer0.registrar.capstone.com': { url: isContainerized ? 'grpcs://peer-registrar.plv-main-campus.svc.cluster.local:7051' : 'grpcs://localhost:7051', tlsCACerts: { pem: getPEM('registrar.capstone.com', 'peer0.registrar.capstone.com') }, grpcOptions: { 'ssl-target-name-override': 'peer0.registrar.capstone.com' } },
-        'peer0.faculty.capstone.com': { url: isContainerized ? 'grpcs://peer-faculty.plv-annex-campus.svc.cluster.local:7051' : 'grpcs://localhost:9051', tlsCACerts: { pem: getPEM('faculty.capstone.com', 'peer0.faculty.capstone.com') }, grpcOptions: { 'ssl-target-name-override': 'peer0.faculty.capstone.com' } },
-        'peer0.department.capstone.com': { url: isContainerized ? 'grpcs://peer-department.plv-pubad-campus.svc.cluster.local:7051' : 'grpcs://localhost:11051', tlsCACerts: { pem: getPEM('department.capstone.com', 'peer0.department.capstone.com') }, grpcOptions: { 'ssl-target-name-override': 'peer0.department.capstone.com' } }
-    };
-
-    ccpForUser.orderers = {
-        ...ccpForUser.orderers,
-        'orderer.capstone.com': { url: isContainerized ? 'grpcs://orderer-1.plv-main-campus.svc.cluster.local:7050' : 'grpcs://localhost:7050', tlsCACerts: { pem: getOrdererPEM() }, grpcOptions: { 'ssl-target-name-override': 'orderer.capstone.com' } }
-    };
-
-    ccpForUser.channels = {
-        [process.env.CHANNEL_NAME || 'registrar-channel']: {
-            orderers: ['orderer.capstone.com'],
-            peers: {
-                'peer0.registrar.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
-                'peer0.faculty.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
-                'peer0.department.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true }
+        ccp.channels = {
+            [process.env.CHANNEL_NAME || 'registrar-channel']: {
+                orderers: ['orderer.capstone.com'],
+                peers: {
+                    'peer0.registrar.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
+                    'peer0.faculty.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
+                    'peer0.department.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true }
+                }
             }
-        }
-    };
+        };
+    }
 
     const grpcOptions = {
         'grpc.keepalive_time_ms': 120000,
@@ -1012,51 +609,40 @@ async function getContractForUser(username, roleHint) {
         'grpc.max_receive_message_length': -1
     };
 
-    if (ccpForUser.peers) {
-        for (const peer in ccpForUser.peers) {
-            ccpForUser.peers[peer].grpcOptions = { ...ccpForUser.peers[peer].grpcOptions, ...grpcOptions };
+    if (ccp.peers) {
+        for (const peer in ccp.peers) {
+            ccp.peers[peer].grpcOptions = { ...ccp.peers[peer].grpcOptions, ...grpcOptions };
         }
     }
-    if (ccpForUser.orderers) {
-        for (const orderer in ccpForUser.orderers) {
-            ccpForUser.orderers[orderer].grpcOptions = { ...ccpForUser.orderers[orderer].grpcOptions, ...grpcOptions };
+    if (ccp.orderers) {
+        for (const orderer in ccp.orderers) {
+            ccp.orderers[orderer].grpcOptions = { ...ccp.orderers[orderer].grpcOptions, ...grpcOptions };
         }
     }
 
     const gateway = new Gateway();
-    await gateway.connect(ccpForUser, {
+    await gateway.connect(ccp, {
         wallet,
         identity: username, 
-<<<<<<< Updated upstream
-        discovery: { enabled: fs.existsSync('/.dockerenv'), asLocalhost: false }
-=======
-        discovery: { enabled: false, asLocalhost: false }
->>>>>>> Stashed changes
+        discovery: { enabled: isContainerized, asLocalhost: !isContainerized }
     });
 
     const network = await gateway.getNetwork(process.env.CHANNEL_NAME || 'registrar-channel');
     const contract = network.getContract(process.env.CHAINCODE_NAME || 'registrar');
 
-    const now = Date.now();
-    userGatewayCache.set(username, { gateway, contract, createdAt: now, lastAccessed: now });
+    userGatewayCache.set(username, { gateway, contract, lastAccessed: Date.now() });
 
     return { contract, gateway }; 
 }
 
 const getCallerIdentity = (req) => {
     if (req.user && req.user.username) return req.user.username;
-
+    
     if (req.isInternal) {
-        const identity = req.headers['x-user-identity'] || req.query.invokerId;
-        if (identity) {
-            return identity;
-        }
-        // Trusting identity from the request body is insecure, even for internal calls.
-        // The calling service must provide the identity in the 'x-user-identity' header.
-        throw new Error("Internal call is missing the 'x-user-identity' header.");
+        return req.headers['x-user-identity'] || req.query.invokerId || req.body.facultyId || req.body.FacultyId || req.body.ApprovedBy || req.body.approvedBy;
     }
     throw new Error("Unauthorized caller identity access attempt.");
-};
+};  
 
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -1065,24 +651,6 @@ const loginLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
 });
-
-const signLoginToken = (username, platformRole, dbRole) => {
-    const tokenPayload = {
-        username,
-        role: platformRole,
-        dbRole,
-        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": username,
-        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": username,
-        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": username,
-        "http://schemas.microsoft.com/ws/2008/06/identity/claims/role": dbRole
-    };
-
-    const jwtOptions = { expiresIn: process.env.JWT_EXPIRES_IN || '12h' };
-    if (process.env.JWT_ISSUER) jwtOptions.issuer = process.env.JWT_ISSUER;
-    if (process.env.JWT_AUDIENCE) jwtOptions.audience = process.env.JWT_AUDIENCE;
-
-    return jwt.sign(tokenPayload, JWT_SECRET, jwtOptions);
-};
 
 app.post('/api/login', loginLimiter, async (req, res) => {
     try {
@@ -1117,23 +685,13 @@ app.post('/api/login', loginLimiter, async (req, res) => {
             return res.status(401).json({ error: "Invalid email or password." });
         }
 
-        const dbRole = normalizeDatabaseRole(userRecord.role);
-        if (dbRole === 'system_admin') {
-            const token = signLoginToken(walletIdentityName, 'SystemAdmin', dbRole);
-            return res.status(200).json({
-                status: 'success',
-                token,
-                message: 'Use this token in the Authorization header: Bearer <token>'
-            });
-        }
-
-        const wallet = await getWallet(dbRole);
+        const wallet = await getWallet(userRecord.role);
         let identity = await wallet.get(walletIdentityName);
         
         if (!identity) {
             console.warn(`[Self-Healing] Wallet missing for ${walletIdentityName}. Attempting automatic recovery...`);
             try {
-                const { caURL, caName, adminLabel, mspId, tlsOptions, caClient } = getCAConfig(dbRole);
+                const { caURL, caName, adminLabel, mspId, tlsOptions, caClient } = getCAConfig(userRecord.role);
                 const ca = caClient;
                 
                 try {
@@ -1161,11 +719,10 @@ app.post('/api/login', loginLimiter, async (req, res) => {
                     const registerPayload = {
                         enrollmentID: walletIdentityName,
                         enrollmentSecret: password,
-                        role: (dbRole === 'registrar' || dbRole === 'department_admin') ? 'admin' : 'client',
-                        maxEnrollments: -1,
+                        role: (userRecord.role === 'registrar' || userRecord.role === 'department_admin' || userRecord.role === 'deptAdmin' || userRecord.role === 'chairperson') ? 'admin' : 'client',
                         attrs: [
-                            { name: 'role', value: dbRole, ecert: true },
-                            { name: 'grade.manage', value: dbRole === 'faculty' ? 'true' : 'false', ecert: true }
+                            { name: 'role', value: userRecord.role, ecert: true },
+                            { name: 'grade.manage', value: userRecord.role === 'faculty' ? 'true' : 'false', ecert: true }
                         ]
                     };
                     
@@ -1191,8 +748,8 @@ app.post('/api/login', loginLimiter, async (req, res) => {
                                 console.log(`[Self-Healing] CA Force Delete failed: ${e.message}. Attempting forced update...`);
                                 await identityService.update(walletIdentityName, { 
                                     type: registerPayload.role,
-                                    enrollmentSecret: password,
-                                    maxEnrollments: -1,
+                                    secret: password, 
+                                    max_enrollments: -1,
                                     attrs: registerPayload.attrs 
                                 }, adminUser);
                             }
@@ -1221,7 +778,21 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         }
 
 
-        const token = signLoginToken(walletIdentityName, identity.mspId, dbRole);
+        const tokenPayload = { 
+            username: walletIdentityName, 
+            role: identity.mspId, 
+            dbRole: userRecord.role,
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": walletIdentityName,
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": walletIdentityName,
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": walletIdentityName,
+            "http://schemas.microsoft.com/ws/2008/06/identity/claims/role": userRecord.role
+        };
+        
+        const jwtOptions = { expiresIn: process.env.JWT_EXPIRES_IN || '12h' };
+        if (process.env.JWT_ISSUER) jwtOptions.issuer = process.env.JWT_ISSUER;
+        if (process.env.JWT_AUDIENCE) jwtOptions.audience = process.env.JWT_AUDIENCE;
+
+        const token = jwt.sign(tokenPayload, JWT_SECRET, jwtOptions);
         res.status(200).json({ status: "success", token, message: "Use this token in the Authorization header: Bearer <token>" });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1328,7 +899,7 @@ app.post('/api/forgot-password', passwordResetLimiter, async (req, res) => {
         const frontendUrl = process.env.FRONTEND_URL || req.headers.origin || 'http://localhost';
         const resetURL = `${frontendUrl}/reset-password?token=${resetToken}`;
         
-        console.log(`[PasswordReset] Reset link generated for ${email}.`);
+        console.log(`[DEV MODE] Reset Link generated: ${resetURL}\n`);
 
         const transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST || process.env.EMAIL_HOST || 'smtp.gmail.com',
@@ -1379,7 +950,7 @@ app.post('/api/reset-password', async (req, res) => {
 app.post('/api/enroll', authenticateJWT, requireRegistrarOrInternal, async (req, res) => {
     try {
         const { username, password, role } = req.body;
-        const { caName, mspId, caClient } = getCAConfig(role);
+        const { mspId, caClient } = getCAConfig(role);
 
         const ca = caClient;
         const wallet = await getWallet(role);
@@ -1494,7 +1065,10 @@ app.post('/api/revoke', authenticateJWT, requireRegistrarOrInternal, async (req,
         await ca.revoke({ enrollmentID: username, reason: "Revoked by admin" }, adminUser);
         if (await wallet.get(username)) await wallet.remove(username);
 
-        disconnectCachedGateway(username, 'revoked');
+        if (userGatewayCache.has(username)) {
+            userGatewayCache.get(username).gateway.disconnect();
+            userGatewayCache.delete(username);
+        }
 
         res.status(200).json({ status: "success", message: `Revoked ${username}` });
     } catch (error) { 
@@ -1735,7 +1309,10 @@ app.delete('/api/wallet/:username', authenticateJWT, requireRegistrarOrInternal,
             }
         }
         if (deleted) {
-            disconnectCachedGateway(req.params.username, 'identity-removed');
+            if (userGatewayCache.has(req.params.username)) {
+                userGatewayCache.get(req.params.username).gateway.disconnect();
+                userGatewayCache.delete(req.params.username);
+            }
             return res.status(200).json({ status: "success", message: "Wallet identity deleted." });
         }
         res.status(404).json({ status: "error", message: "Identity not found in wallet." });
@@ -1884,10 +1461,8 @@ app.post('/api/batch-issue-grade', async (req, res) => {
             });
         }
 
-        const { contract } = await getContractForUser(username, 'faculty'); // either faculty or department works for getting the contract
-
-        const records = req.body; // Expecting an array of AcademicRecord objects
-        const recordsJSON = JSON.stringify(records);
+        const { contract } = await getContractForUser(username, 'faculty'); 
+        const records = req.body;      const recordsJSON = JSON.stringify(records);
         console.log(`[BatchIssueGrade] Submitting as ${username}... Payload: ${recordsJSON.length} bytes`);
         
         const result = await contract.submitTransaction('IssueBatchGrades', recordsJSON);
@@ -1904,152 +1479,39 @@ app.post('/api/batch-issue-grade', async (req, res) => {
     }
 });
 
-const bootstrapSystemAdminAccount = async () => {
-    const password = process.env.BOOTSTRAP_SYSTEM_ADMIN_PASSWORD || process.env.BOOTSTRAP_SYSTEM_ADMIN_PASS;
-    if (!password) {
-        return {
-            configured: false,
-            accountCreated: false,
-            message: 'System administrator bootstrap skipped because BOOTSTRAP_SYSTEM_ADMIN_PASS is not configured.'
-        };
-    }
-
-    const email = (process.env.BOOTSTRAP_SYSTEM_ADMIN_EMAIL || 'system-admin@plv.edu.ph').trim().toLowerCase();
-    const fullName = (process.env.BOOTSTRAP_SYSTEM_ADMIN_NAME || 'PLV System Administrator').trim();
-    let userResult = await dbWrite.query('SELECT id, role, password_hash FROM Users WHERE LOWER(email) = $1', [email]);
-    let accountCreated = false;
-    let passwordUpdated = false;
-
-    if (userResult.rows.length === 0) {
-        const hash = await bcrypt.hash(password, 12);
-        userResult = await dbWrite.query(
-            `INSERT INTO Users (email, password_hash, role, status, is_active)
-             VALUES ($1, $2, 'system_admin', 'APPROVED', true)
-             ON CONFLICT (email) DO NOTHING
-             RETURNING id, role`,
-            [email, hash]
-        );
-        accountCreated = userResult.rows.length > 0;
-
-        if (!accountCreated) {
-            userResult = await dbWrite.query('SELECT id, role, password_hash FROM Users WHERE LOWER(email) = $1', [email]);
-        }
-    } else {
-        const userRecord = userResult.rows[0];
-        const isSamePassword = await bcrypt.compare(password, userRecord.password_hash);
-        if (!isSamePassword) {
-            const hash = await bcrypt.hash(password, 12);
-            await dbWrite.query('UPDATE Users SET password_hash = $1 WHERE id = $2', [hash, userRecord.id]);
-            passwordUpdated = true;
-        }
-    }
-
-    if (userResult.rows.length === 0 || normalizeDatabaseRole(userResult.rows[0].role) !== 'system_admin') {
-        throw new Error(`Cannot bootstrap system administrator: ${email} already belongs to another role.`);
-    }
-
-    await dbWrite.query(
-        `INSERT INTO AdminProfiles (user_id, full_name, admin_level, department)
-         VALUES ($1, $2, 'system_admin', 'System Operations')
-         ON CONFLICT (user_id) DO UPDATE
-         SET full_name = EXCLUDED.full_name,
-             admin_level = EXCLUDED.admin_level,
-             department = EXCLUDED.department`,
-        [userResult.rows[0].id, fullName]
-    );
-
-    return {
-        configured: true,
-        accountCreated,
-        email,
-        message: passwordUpdated
-            ? 'System administrator password has been reset to the value in BOOTSTRAP_SYSTEM_ADMIN_PASS.'
-            : (accountCreated
-                ? 'System administrator account created without a Fabric identity.'
-                : 'System administrator account already exists.')
-    };
-};
-
-app.get('/api/bootstrap', requireInternalApiKey, async (req, res) => {
+app.get('/api/bootstrap', async (req, res) => {
     try {
-        const email = (process.env.BOOTSTRAP_REGISTRAR_EMAIL || 'registrar@plv.edu.ph').trim().toLowerCase();
-        const password = process.env.BOOTSTRAP_REGISTRAR_PASSWORD || process.env.BOOTSTRAP_REGISTRAR_PASS;
+        const email = 'registrar@plv.edu.ph';
+        const password = 'admin123';
         const role = 'registrar';
 
-        if (!password) {
-            return res.status(400).json({
-                error: 'BOOTSTRAP_REGISTRAR_PASSWORD or BOOTSTRAP_REGISTRAR_PASS is required before bootstrap can run.'
-            });
+        const userCheck = await dbRead.query('SELECT * FROM Users WHERE email = $1', [email]);
+        if (userCheck.rows.length > 0) {
+            return res.status(200).json({ message: "Bootstrap already completed. Registrar exists." });
         }
 
-        let userResult = await dbWrite.query('SELECT id FROM Users WHERE LOWER(email) = $1', [email]);
-        let accountCreated = false;
-
-        if (userResult.rows.length === 0) {
-            const hash = await bcrypt.hash(password, 10);
-            userResult = await dbWrite.query(
-                `INSERT INTO Users (email, password_hash, role, status)
-                 VALUES ($1, $2, $3, 'APPROVED')
-                 ON CONFLICT (email) DO NOTHING
-                 RETURNING id`,
-                [email, hash, role]
-            );
-
-            if (userResult.rows.length === 0) {
-                userResult = await dbWrite.query('SELECT id FROM Users WHERE LOWER(email) = $1', [email]);
-            } else {
-                accountCreated = true;
-            }
-        }
-
+        const hash = await bcrypt.hash(password, 10);
+        const userResult = await dbWrite.query(
+            "INSERT INTO Users (email, password_hash, role, status) VALUES ($1, $2, $3, 'APPROVED') RETURNING id",
+            [email, hash, role]
+        );
+        
         await dbWrite.query(
-            `INSERT INTO AdminProfiles (user_id, full_name, admin_level, department)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (user_id) DO NOTHING`,
+            "INSERT INTO AdminProfiles (user_id, full_name, admin_level, department) VALUES ($1, $2, $3, $4)",
             [userResult.rows[0].id, 'System Registrar', role, 'Registrar']
         );
-
-        const systemAdmin = await bootstrapSystemAdminAccount();
-
-        const wallet = await getWallet(role);
-        if (await wallet.get(email)) {
-            return res.status(200).json({
-                status: 'success',
-                systemAdmin,
-                message: 'Bootstrap already completed. Registrar account and wallet identity exist.'
-            });
-        }
 
         const { caURL, caName, adminLabel, mspId, tlsOptions, caClient } = getCAConfig(role);
         await ensureAdminEnrolled(caURL, caName, mspId, adminLabel, tlsOptions, caClient);
         
         const ca = caClient;
-        const adminIdentity = await wallet.get(adminLabel);
-        if (!adminIdentity) throw new Error(`Admin ${adminLabel} is missing from the registrar wallet.`);
-
-        const provider = wallet.getProviderRegistry().getProvider(adminIdentity.type);
-        const adminUser = await provider.getUserContext(adminIdentity, 'admin');
-        const registrarAttributes = [{ name: 'role', value: role, ecert: true }];
-
+        const wallet = await getWallet(role);
         try {
-            await ca.register({
-                enrollmentID: email,
-                enrollmentSecret: password,
-                role: 'admin',
-                maxEnrollments: -1,
-                attrs: registrarAttributes
-            }, adminUser);
-        } catch (err) {
-            if (!err.toString().includes('is already registered')) throw err;
-
-            const identityService = ca.newIdentityService();
-            await identityService.update(email, {
-                type: 'admin',
-                enrollmentSecret: password,
-                maxEnrollments: -1,
-                attrs: registrarAttributes
-            }, adminUser);
-        }
+            const adminIdentity = await wallet.get(adminLabel);
+            const provider = wallet.getProviderRegistry().getProvider(adminIdentity.type);
+            const adminUser = await provider.getUserContext(adminIdentity, 'admin');
+            await ca.register({ enrollmentID: email, enrollmentSecret: password, role: 'admin', attrs: [{ name: 'role', value: role, ecert: true }] }, adminUser);
+        } catch (err) { if (!err.toString().includes('is already registered')) throw err; }
 
         const enrollment = await ca.enroll({ 
             enrollmentID: email, 
@@ -2058,81 +1520,20 @@ app.get('/api/bootstrap', requireInternalApiKey, async (req, res) => {
         });
         await wallet.put(email, { credentials: { certificate: enrollment.certificate, privateKey: enrollment.key.toBytes() }, mspId: mspId, type: 'X.509' });
 
-        res.status(200).json({
-            status: 'success',
-            accountCreated,
-            systemAdmin,
-            message: 'Registrar securely bootstrapped. You can now log in.'
-        });
-    } catch (error) {
-        console.error('[Bootstrap] Failed:', error.message);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/api/health', (req, res) => res.status(200).json({
-    status: 'operational',
-    mode: 'Production Security (ABAC ACTIVE)',
-    uptimeSeconds: Math.round(process.uptime())
-}));
-
-app.get('/api/ready', async (req, res) => {
-    if (isShuttingDown) {
-        return res.status(503).json({ status: 'draining' });
-    }
-
-    try {
-        await dbRead.query('SELECT 1');
-        return res.status(200).json({ status: 'ready' });
-    } catch (error) {
-        return res.status(503).json({ status: 'not_ready', error: error.message });
-    }
-});
-
-app.get('/metrics', (req, res) => {
-    res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-    res.send(renderPrometheusMetrics());
-});
-
-app.get('/debug/heapsnapshot', (req, res) => {
-    const debugToken = process.env.DEBUG_TOKEN;
-    if (!debugToken) {
-        return res.status(404).json({ error: 'Debug heap snapshots are disabled.' });
-    }
-
-    const providedToken = req.query.token || req.headers['x-debug-token'];
-    if (providedToken !== debugToken) {
-        return res.status(403).json({ error: 'Unauthorized.' });
-    }
-
-    try {
-        const snapshotPath = path.join(os.tmpdir(), `blockgo-heap-${process.pid}-${Date.now()}.heapsnapshot`);
-        const writtenPath = v8.writeHeapSnapshot(snapshotPath);
-        res.download(writtenPath, path.basename(writtenPath), (error) => {
-            fs.unlink(writtenPath, (unlinkError) => {
-                if (unlinkError) console.warn(`[Heap Snapshot] Failed to remove ${writtenPath}: ${unlinkError.message}`);
-            });
-
-            if (error && !res.headersSent) {
-                res.status(500).json({ error: error.message });
-            }
-        });
+        res.status(200).json({ status: "success", message: "Registrar securely bootstrapped! You can now log in." });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
+
+app.get('/api/health', (req, res) => res.status(200).json({ status: "operational", mode: 'Production Security (ABAC ACTIVE)' }));
 
 const PORT = process.env.PORT || 4000;
-let server;
 
 async function startServer() {
-    try {
-        await importCryptogenAdmins();
-    } catch (e) {
-        console.error("Startup wallet sync failed:", e.message);
-    }
+    importCryptogenAdmins().catch(e => console.error("Startup wallet sync failed:", e.message));
 
-    server = app.listen(PORT, '0.0.0.0', () => {
+    app.listen(PORT, '0.0.0.0', () => {
         console.log(`\nMiddleware online on port ${PORT}`);
         console.log(`Mode: Production Security (OBAC/ABAC ACTIVE)`);
         console.log(` Dynamic Identity Loading: Enabled\n`);
@@ -2141,54 +1542,14 @@ async function startServer() {
 
 startServer();
 
-const closeServer = () => new Promise((resolve) => {
-    if (!server) return resolve();
-
-    server.close((error) => {
-        if (error) console.error(`[Shutdown] HTTP server close failed: ${error.message}`);
-        resolve();
-    });
-});
-<<<<<<< Updated upstream
-=======
-
-const withTimeout = (promise, timeoutMs, label) => new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-        console.warn(`[Shutdown] Timed out waiting for ${label} after ${timeoutMs}ms`);
-        resolve();
-    }, timeoutMs);
-    if (typeof timeout.unref === 'function') timeout.unref();
-
-    promise
-        .catch((error) => console.error(`[Shutdown] ${label} failed: ${error.message}`))
-        .finally(() => {
-            clearTimeout(timeout);
-            resolve();
-        });
-});
-
-const shutdown = async (signal) => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-
-    console.log(`\nReceived ${signal}. Draining middleware before shutdown...`);
-    clearManagedIntervals();
-
-    await withTimeout(closeServer(), SHUTDOWN_GRACE_MS, 'HTTP server drain');
-
-    for (const [username] of Array.from(userGatewayCache.entries())) {
-        disconnectCachedGateway(username, 'shutdown');
-    }
-    caConfigCache.clear();
-
-    await Promise.allSettled([
-        dbRead.end(),
-        dbWrite.end()
-    ]);
-
+process.on('SIGINT', () => {
+    console.log('\nGracefully shutting down...');
+    userGatewayCache.forEach(cached => cached.gateway.disconnect());
     process.exit(0);
-};
+});
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
->>>>>>> Stashed changes
+process.on('SIGTERM', () => {
+    console.log('\nReceived SIGTERM from Kubernetes. Gracefully shutting down...');
+    userGatewayCache.forEach(cached => cached.gateway.disconnect());
+    process.exit(0);
+});

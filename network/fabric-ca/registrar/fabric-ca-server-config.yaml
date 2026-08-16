@@ -315,17 +315,11 @@ csr:
    names:
       - C: US
         ST: "North Carolina"
-        L:
         O: Hyperledger
         OU: Fabric
    hosts:
-<<<<<<< Updated upstream
-     - 3cf702b71551
-=======
-     - ca-registrar
-     - ca-registrar.plv-main-campus.svc.cluster.local
+     - fabric-ca-registrar.plv-main-campus.svc.cluster.local
      - ca.registrar.capstone.com
->>>>>>> Stashed changes
      - localhost
    ca:
       expiry: 131400h

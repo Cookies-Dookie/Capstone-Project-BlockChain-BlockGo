@@ -22,17 +22,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 declare -a PIDS
-CONFIGTX_RUNTIME_DIR=""
-
-check_binaries() {
-    log_info "Checking for Fabric binaries (configtxgen, fabric-ca-client)..."
-    if [ ! -f "bin/configtxgen" ] || [ ! -f "bin/fabric-ca-client" ]; then
-        log_warn "Fabric binaries not found in '$(pwd)/bin'."
-        log_info "Attempting to download Fabric v${EXPECTED_FABRIC_VERSION} and Fabric CA v1.5.7 binaries..."
-        curl -sSL https://raw.githubusercontent.com/hyperledger/fabric/main/scripts/install-fabric.sh | bash -s -- binary --fabric-version "${EXPECTED_FABRIC_VERSION}" --ca-version "1.5.7"
-    fi
-    log_info "✓ Fabric binaries are present."
-}
 
 cleanup_processes() {
     echo ""
@@ -45,10 +34,6 @@ cleanup_processes() {
         rm -f .watchdog.pid
     fi
     pkill -9 -f nginx_failover_watchdog.sh 2>/dev/null || true
-    if [[ -n "${CONFIGTX_RUNTIME_DIR:-}" && -d "$CONFIGTX_RUNTIME_DIR" ]]; then
-        rm -rf -- "$CONFIGTX_RUNTIME_DIR"
-        CONFIGTX_RUNTIME_DIR=""
-    fi
     docker compose -f docker-compose-main.yaml -f docker-compose-annex.yaml -f docker-compose-pubad.yaml down -v --remove-orphans 2>/dev/null || true
     docker rm -f -v couchdb_wallet couchdb_wallet_faculty couchdb_wallet_department blockgo-middleware nginx-shield-main-failover nginx-shield-annex-failover nginx-shield-pubad-failover 2>/dev/null || true
     log_info "All processes stopped and volumes wiped."
@@ -149,9 +134,6 @@ spawn_couchdb_wallet() {
 # PHASE 1: INITIAL CLEANING & CA STARTUP
 # ============================================================
 log_info "Phase 1: Initializing CA infrastructure..."
-
-check_binaries
-
 log_warn "Wiping previous CA databases and crypto material..."
 
 # Gracefully stop the orphaned watchdog if it's still running
@@ -165,9 +147,9 @@ docker compose -f docker-compose-main.yaml -f docker-compose-annex.yaml -f docke
 docker rm -f -v couchdb_wallet couchdb_wallet_faculty couchdb_wallet_department blockgo-middleware nginx-shield-main-failover nginx-shield-annex-failover nginx-shield-pubad-failover 2>/dev/null || true
 
 # Force remove root-owned files created by containers to prevent CA container crashes
-docker run --rm -v "$(pwd):/tmp/network" alpine sh -c "rm -rf /tmp/network/fabric-ca/registrar/* /tmp/network/fabric-ca/faculty/* /tmp/network/fabric-ca/department/* /tmp/network/${CRYPTO_DIR} /tmp/network/${ARTIFACTS_DIR} /tmp/network/../middleware/wallet" 2>/dev/null || true
+docker run --rm -v "$(pwd):/tmp/network" alpine sh -c "find /tmp/network/fabric-ca -type f ! -name '*.yaml' -delete && rm -rf /tmp/network/${CRYPTO_DIR} /tmp/network/${ARTIFACTS_DIR} /tmp/network/../middleware/wallet" 2>/dev/null || true
 
-rm -rf ./fabric-ca/registrar/* ./fabric-ca/faculty/* ./fabric-ca/department/* 2>/dev/null || true
+find ./fabric-ca -type f ! -name '*.yaml' -delete 2>/dev/null || true
 rm -rf "$CRYPTO_DIR" "$ARTIFACTS_DIR" 2>/dev/null || true
 rm -rf ../middleware/wallet 2>/dev/null || true
 mkdir -p "$ARTIFACTS_DIR"
@@ -191,16 +173,7 @@ enroll_org_identities() {
     local ORG=$1; local DOMAIN=$2; local PORT=$3; local MSP_ID=$4
     local ADMIN_PASS=${BOOTSTRAP_REGISTRAR_PASS:-adminpw}
     local ORG_DIR="$(pwd)/${CRYPTO_DIR}/peerOrganizations/${DOMAIN}"
-    local TLS_CERT="$(pwd)/fabric-ca/${ORG}/tls-cert.pem"
-    local K8S_NAMESPACE
-    local K8S_PEER_SERVICE="peer-${ORG}"
-
-    case "$ORG" in
-        registrar) K8S_NAMESPACE="plv-main-campus" ;;
-        faculty) K8S_NAMESPACE="plv-annex-campus" ;;
-        department) K8S_NAMESPACE="plv-pubad-campus" ;;
-        *) log_error "Unsupported organization for Kubernetes TLS enrollment: ${ORG}" ;;
-    esac
+    local TLS_CERT="$(pwd)/fabric-ca/${ORG}/tls-cert.pem" 
     
     log_info "Bootstrapping ${MSP_ID}..."
     mkdir -p "${ORG_DIR}/msp" "${ORG_DIR}/users/Admin@${DOMAIN}/msp" "${ORG_DIR}/peers/peer0.${DOMAIN}/msp" "${ORG_DIR}/peers/peer0.${DOMAIN}/tls" "${ORG_DIR}/peers/peer1.${DOMAIN}/msp" "${ORG_DIR}/peers/peer1.${DOMAIN}/tls"
@@ -211,7 +184,7 @@ enroll_org_identities() {
     fabric-ca-client register --caname ca-${ORG} --id.name peer0 --id.secret peer0pw --id.type peer --tls.certfiles "${TLS_CERT}" --home "${ORG_DIR}"
     fabric-ca-client enroll -u https://peer0:peer0pw@localhost:${PORT} --caname ca-${ORG} -M "${ORG_DIR}/peers/peer0.${DOMAIN}/msp" --tls.certfiles "${TLS_CERT}" --home "${ORG_DIR}"
 
-    fabric-ca-client enroll -u https://peer0:peer0pw@localhost:${PORT} --caname ca-${ORG} -M "${ORG_DIR}/peers/peer0.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "peer0.${DOMAIN},localhost,${K8S_PEER_SERVICE},${K8S_PEER_SERVICE}.${K8S_NAMESPACE}.svc.cluster.local" --tls.certfiles "${TLS_CERT}" --home "${ORG_DIR}"
+    fabric-ca-client enroll -u https://peer0:peer0pw@localhost:${PORT} --caname ca-${ORG} -M "${ORG_DIR}/peers/peer0.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "peer0.${DOMAIN},localhost" --tls.certfiles "${TLS_CERT}" --home "${ORG_DIR}"
 
     cp "${ORG_DIR}/peers/peer0.${DOMAIN}/tls/signcerts/"* "${ORG_DIR}/peers/peer0.${DOMAIN}/tls/server.crt"
     cp "${ORG_DIR}/peers/peer0.${DOMAIN}/tls/keystore/"* "${ORG_DIR}/peers/peer0.${DOMAIN}/tls/server.key"
@@ -274,7 +247,7 @@ enroll_orderer_identities() {
     fabric-ca-client enroll -u https://orderer:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer.${DOMAIN}/msp" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
 
     # Enroll for TLS (This is what configtxgen needs!)
-    fabric-ca-client enroll -u https://orderer:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "orderer.capstone.com,localhost" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
+    fabric-ca-client enroll -u https://orderer:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "orderer.capstone.com,localhost,orderer-1.plv-main-campus.svc.cluster.local" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
 
     # Normalize TLS filenames for Fabric
     cp "${ORDERER_DIR}/orderers/orderer.${DOMAIN}/tls/signcerts/"* "${ORDERER_DIR}/orderers/orderer.${DOMAIN}/tls/server.crt"
@@ -290,7 +263,7 @@ enroll_orderer_identities() {
     # === ORDERER 2 (Annex) ===
     fabric-ca-client register --caname ca-registrar --id.name orderer2 --id.secret ordererpw --id.type orderer --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
     fabric-ca-client enroll -u https://orderer2:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/msp" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
-    fabric-ca-client enroll -u https://orderer2:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "orderer2.capstone.com,localhost" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
+    fabric-ca-client enroll -u https://orderer2:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "orderer2.capstone.com,localhost,orderer-2.plv-main-campus.svc.cluster.local" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
     cp "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/tls/signcerts/"* "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/tls/server.crt"
     cp "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/tls/keystore/"* "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/tls/server.key"
     cp "${ORDERER_DIR}/msp/cacerts/localhost-7054-ca-registrar.pem" "${ORDERER_DIR}/orderers/orderer2.${DOMAIN}/tls/ca.crt"
@@ -300,7 +273,7 @@ enroll_orderer_identities() {
     # === ORDERER 3 (Pubad) ===
     fabric-ca-client register --caname ca-registrar --id.name orderer3 --id.secret ordererpw --id.type orderer --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
     fabric-ca-client enroll -u https://orderer3:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/msp" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
-    fabric-ca-client enroll -u https://orderer3:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "orderer3.capstone.com,localhost" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
+    fabric-ca-client enroll -u https://orderer3:ordererpw@localhost:${PORT} --caname ca-registrar -M "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/tls" --enrollment.profile tls --csr.hosts "orderer3.capstone.com,localhost,orderer-3.plv-annex-campus.svc.cluster.local" --tls.certfiles "${TLS_CERT}" --home "${ORDERER_DIR}"
     cp "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/tls/signcerts/"* "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/tls/server.crt"
     cp "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/tls/keystore/"* "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/tls/server.key"
     cp "${ORDERER_DIR}/msp/cacerts/localhost-7054-ca-registrar.pem" "${ORDERER_DIR}/orderers/orderer3.${DOMAIN}/tls/ca.crt"
@@ -409,21 +382,15 @@ log_info "Phase 3: Building frontend application..."
  elif [ ! -f src/index.css ]; then echo -e "@tailwind base;\n@tailwind components;\n@tailwind utilities;\n" > src/index.css; fi && \
  DISABLE_ESLINT_PLUGIN=true npm run build)
 
-if ! grep -q "orderer-3.plv-annex-campus.svc.cluster.local" config/configtx-k8s.yaml; then
-    log_error "configtx-k8s.yaml is missing the third Kubernetes Raft orderer."
+if ! grep -q "orderer3.capstone.com" config/configtx.yaml; then
+    log_error "Your configtx.yaml is missing the 3-node Raft cluster! Please update it to include orderer, orderer2, and orderer3."
 fi
 
-log_info "Generating Kubernetes channel artifacts..."
-CONFIGTX_RUNTIME_DIR="$(mktemp -d "$(pwd)/.configtx-k8s.XXXXXX")"
-cp "$(pwd)/config/configtx-k8s.yaml" "${CONFIGTX_RUNTIME_DIR}/configtx.yaml"
-export FABRIC_CFG_PATH="$CONFIGTX_RUNTIME_DIR"
+log_info "Generating Channel Artifacts..."
+export FABRIC_CFG_PATH="$(pwd)/config"
+configtxgen -profile UniversityGenesis -channelID system-channel -outputBlock "./${ARTIFACTS_DIR}/orderer.genesis.block"
 
-log_info "Using Kubernetes configtx profile from config/configtx-k8s.yaml"
-configtxgen -configPath "$FABRIC_CFG_PATH" -profile UniversityGenesis -channelID system-channel -outputBlock "./${ARTIFACTS_DIR}/orderer.genesis.block"
-
-configtxgen -configPath "$FABRIC_CFG_PATH" -profile RegistrarChannel -outputBlock "./${ARTIFACTS_DIR}/${CHANNEL_NAME}.block" -channelID "$CHANNEL_NAME"
-rm -rf -- "$CONFIGTX_RUNTIME_DIR"
-CONFIGTX_RUNTIME_DIR=""
+configtxgen -profile RegistrarChannel -outputBlock "./${ARTIFACTS_DIR}/${CHANNEL_NAME}.block" -channelID $CHANNEL_NAME
 
 log_info "Shutting down local Certificate Authorities..."
 docker compose -f docker-compose-main.yaml -f docker-compose-annex.yaml -f docker-compose-pubad.yaml down -v --remove-orphans 2>/dev/null || true
@@ -431,8 +398,5 @@ docker compose -f docker-compose-main.yaml -f docker-compose-annex.yaml -f docke
 log_info "============================================================"
 log_info "CLOUD CRYPTO PREPARATION COMPLETE!"
 log_info "All certificates and Genesis blocks have been safely generated."
-log_info "This preparation script intentionally leaves Docker Compose stopped."
-log_info "For local Kubernetes, run: ./k8s/deploy-k8s.sh local apply"
-log_info "The local application will then be available at http://localhost:8080"
-log_info "For GKE, run: ./k8s/deploy-k8s.sh production apply"
+log_info "You can now run: ./k8s/deploy-k8s.sh apply"
 log_info "============================================================"

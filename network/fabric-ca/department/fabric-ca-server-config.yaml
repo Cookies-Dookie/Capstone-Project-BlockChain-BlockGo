@@ -319,13 +319,8 @@ csr:
         O: Hyperledger
         OU: Fabric
    hosts:
-<<<<<<< Updated upstream
-     - 0c5567d5f31a
-=======
-     - ca-department
-     - ca-department.plv-pubad-campus.svc.cluster.local
+     - fabric-ca-department.plv-pubad-campus.svc.cluster.local
      - ca.department.capstone.com
->>>>>>> Stashed changes
      - localhost
    ca:
       expiry: 131400h

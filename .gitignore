@@ -75,6 +75,8 @@ appsettings.*.json
 # DOCKER & DEPLOYMENT
 # =========================
 docker-compose.override.yml
+network/.tmp-k8s/
+network/k8s/.tmp-k8s/
 # =========================
 # BLOCKCHAIN NETWORK SPECIFIC
 # =========================
@@ -98,6 +100,5 @@ chaincode/.env
 !network/channel-artifacts-final/.gitkeep
 
 # Ignore Binaries but KEEP directory
+network/bin/*
 !network/bin/.gitkeep
-
-# Fabric CA generated keys and databases

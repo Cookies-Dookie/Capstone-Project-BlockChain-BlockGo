@@ -1,0 +1,257 @@
+# K8s Deployment Guide for PLV BLOCKGO
+
+## Quick Start
+
+### 1. Prerequisites
+- Kubernetes cluster (v1.24+) running (local: Docker Desktop, minikube, kind)
+- `kubectl` CLI installed and configured
+- Sufficient resources: 4 CPU cores, 16GB RAM minimum
+
+### 2. Deploy to Kubernetes
+
+```bash
+# Navigate to the network directory
+cd ../network
+chmod +x ./full_deploy.sh
+
+# Local testing profile
+./k8s/deploy-k8s.sh local apply
+
+# The local frontend and API gateway are exposed automatically at:
+# http://localhost:8080
+
+# Production/GKE profile
+./k8s/deploy-k8s.sh production apply
+
+# Monitor deployment status
+./k8s/deploy-k8s.sh local status
+
+# View logs
+kubectl logs deployment/plv-middleware -n plv-fabric -f
+```
+
+The local profile does not create application HPAs because Docker Desktop does
+not expose the `metrics.k8s.io` resource metrics API by default. The production
+profile applies `11a-application-hpa.yaml`; confirm the target cluster provides
+the resource metrics API before deploying.
+
+### 3. Verify Deployment
+
+```bash
+# Check all pods running
+kubectl get pods -n plv-fabric
+kubectl get pods -n plv-main-campus
+
+# Check services
+kubectl get svc -n plv-fabric
+kubectl get svc -n plv-main-campus
+
+# Check persistent volumes
+kubectl get pvc --all-namespaces
+```
+
+### 4. Access the API
+
+For the local profile, use `http://localhost:8080`. The frontend Nginx service
+routes browser requests to the middleware, C# backend, SignalR hub, and IPFS
+services inside Kubernetes. The deployment script owns the background
+port-forward and `./k8s/deploy-k8s.sh local delete` stops it forcefully.
+
+Direct middleware access is optional for debugging:
+
+```bash
+# Port-forward middleware API
+kubectl port-forward -n plv-fabric svc/middleware-api 4000:4000
+
+# Test health endpoint
+curl http://localhost:4000/api/health
+```
+
+### System Administrator Portal
+
+The system administrator uses the normal frontend login page and is routed to
+the dedicated monitoring portal. This role is database-only: it is not enrolled
+with a Fabric CA, does not receive a Fabric wallet, and does not load academic
+grade or chat features.
+
+Set a strong, unique password in `network/.env` before deployment to provision
+the account through the internal bootstrap job:
+
+```dotenv
+BOOTSTRAP_SYSTEM_ADMIN_EMAIL=system-admin@plv.edu.ph
+BOOTSTRAP_SYSTEM_ADMIN_PASS=<strong-unique-password>
+```
+
+The bootstrap creates the account only when it does not exist and never prints
+the password. Changing the environment variable later does not rotate an
+existing account password.
+
+Cluster resource metrics and alerts are optional. Set `PROMETHEUS_URL` to a URL
+reachable from the `client-app` pod when Prometheus is deployed. Without it,
+the portal still checks frontend, middleware, backend, and PostgreSQL health and
+reports Prometheus as `not configured`.
+
+### 5. Fabric Network Bootstrap
+
+`deploy-k8s.sh ... apply` automatically joins all orderers and peers to
+`registrar-channel`, installs the organization-specific CCaaS packages,
+approves and commits the chaincode, and initializes the genesis record.
+
+To rerun the idempotent bootstrap manually:
+
+```bash
+./k8s/init-channel.sh
+./k8s/join-peers.sh
+./k8s/install-chaincode.sh
+```
+
+Set `FABRIC_BOOTSTRAP=false` when running `deploy-k8s.sh` only when manifests
+must be applied without changing Fabric channel or chaincode state.
+
+### 6. CouchDB Data Locations
+
+- Wallet CouchDB services (`localhost:5990`, `6990`, and `7990` in Compose)
+  store Fabric identities only. They do not store grades.
+- Peer CouchDB services store Fabric world state. For Compose, the registrar
+  peer database is exposed at `http://localhost:5985/_utils/`.
+- In Kubernetes, port-forward the peer service when direct inspection is
+  required:
+
+```bash
+kubectl port-forward -n plv-main-campus svc/couchdb-registrar 5985:5984
+```
+
+After bootstrap, CouchDB creates `registrar-channel_registrar`. It contains the
+genesis record and grades that have completed registrar finalization. Grades
+that are still being encoded, reviewed, returned, or department-approved remain
+in PostgreSQL `pending_grade_records` until finalization succeeds.
+
+## Architecture Overview
+
+### Namespaces
+- **plv-fabric**: Core blockchain + IPFS + API middleware
+- **plv-main-campus**: Registrar org (orderer, peer, CA)
+- **plv-annex-campus**: Faculty org (CA, peer, CouchDB)
+- **plv-pubad-campus**: Department org (CA, peer, CouchDB)
+
+### Components
+
+| Component | Type | Replicas | Storage |
+|-----------|------|----------|---------|
+| PostgreSQL | StatefulSet | 1 | 100Gi |
+| Fabric Orderer | StatefulSet | 1 | 20Gi |
+| Fabric Peer | Deployment | 1 | 50Gi |
+| Fabric CA | Deployment | 3 | ephemeral |
+| CouchDB | StatefulSet | 1 | 30Gi |
+| Middleware API | Deployment | 2-5 (HPA) | ephemeral |
+| IPFS Nodes | StatefulSet | 3 | 100Gi |
+
+## Storage
+
+- **StorageClass**: `fabric-storage` (host-path provisioner)
+- **Persistent Volumes**: Created on node `/mnt/data/` directories
+- **For production**: Use CSI drivers (AWS EBS, GCP Persistent Disk, Azure Disk, NFS)
+
+## Security
+
+### Secrets Management
+- Runtime credentials are generated from `network/.env` into `blockgo-secrets`
+- `02-configmap-secret.yaml` contains only non-secret ConfigMaps
+- Required application keys: `JWT_SECRET`, `INTERNAL_API_KEY`, `IPFS_ENCRYPTION_KEY`, `BOOTSTRAP_REGISTRAR_PASS`, `VAULT_PASSWORD`
+- System administrator provisioning requires `BOOTSTRAP_SYSTEM_ADMIN_PASS`; `BOOTSTRAP_SYSTEM_ADMIN_EMAIL` is optional
+- Monitoring integration uses optional `PROMETHEUS_URL`
+- Production also requires real `POSTGRES_PASS`, `POSTGRES_REPL_PASS`, and `COUCHDB_PASS`
+- For production: Use HashiCorp Vault, AWS Secrets Manager, or Azure Key Vault
+
+### RBAC
+- ServiceAccounts per component
+- ClusterRoles restrict pod access to necessary resources
+
+### Network Policies
+- Deny-all ingress by default
+- Allow specific pod-to-pod communication
+- Restrict egress to necessary services
+
+### TLS/mTLS
+- Enabled for all Fabric components (CORE_PEER_TLS_ENABLED=true)
+- Certificate paths mounted from secrets
+
+## Troubleshooting
+
+### Pod stuck in Pending
+```bash
+kubectl describe pod <pod-name> -n <namespace>
+# Check PVC, StorageClass, resource limits
+```
+
+### Pod CrashLoopBackOff
+```bash
+kubectl logs <pod-name> -n <namespace> --previous
+# Check environment variables, volume mounts
+```
+
+### Networking issues between pods
+```bash
+kubectl exec -it <pod-name> -n <namespace> -- ping <service-name>
+# Verify DNS resolution and network policies
+```
+
+### Database connection errors
+```bash
+# Check PostgreSQL service
+kubectl get svc postgres -n plv-main-campus
+kubectl exec -it postgres-0 -n plv-main-campus -- psql -U BLOCKGO -d ActivityLogs
+
+# Verify credentials in Secret
+kubectl get secret blockgo-secrets -n plv-fabric -o yaml
+```
+
+## Cleanup
+
+```bash
+# Force-stop local PLV workloads and remove their namespaces, claims, and PVs.
+# Project Docker Compose services, port-forwards, and the failover watchdog are
+# also stopped. Files under network/fabric-k8s-data are preserved.
+./k8s/deploy-k8s.sh local delete
+
+# Graceful manual alternative
+kubectl delete namespace plv-fabric plv-main-campus plv-annex-campus plv-pubad-campus
+```
+
+## Production Considerations
+
+1. **High Availability**
+   - Deploy orderers as StatefulSet with replicas: 3
+   - Deploy peers with anti-affinity rules
+   - Use PodDisruptionBudgets
+
+2. **Persistent Storage**
+   - Replace host-path with cloud storage (EBS, GCP PD, Azure Disk)
+   - Enable automated backups
+   - Test disaster recovery
+
+3. **Monitoring**
+   - Deploy Prometheus + Grafana; the repository currently provides configuration and alert rules, not those workloads
+   - Mount `../monitoring/prometheus.yaml` and `../monitoring/alert-rules.yaml`, then set `PROMETHEUS_URL` to the in-cluster Prometheus service
+   - Import `../monitoring/grafana-dashboard.json`
+   - Scrape middleware metrics from `middleware-api:4000/metrics`
+   - Use kube-state-metrics and cAdvisor panels for frontend, client-app, and middleware deployment health
+   - Use `/nginx-health`, `/api/backend/health`, `/api/health`, and `/api/ready` for runtime health checks
+   - Enable audit logging
+   - Set up alerts for frontend/client-app availability, pod restarts, and memory pressure
+
+4. **Secrets**
+   - Rotate credentials regularly
+   - Use external secrets operator
+   - Encrypt secrets at rest (etcd encryption)
+
+5. **Scaling**
+   - HPA configured for middleware-api
+   - Consider KPA (Knative) for auto-scaling
+   - Monitor resource usage
+
+## References
+
+- [Kubernetes Documentation](https://kubernetes.io/docs/)
+- [Hyperledger Fabric on Kubernetes](https://hyperledger-fabric.readthedocs.io/)
+- [IPFS Kubernetes Deployment](https://docs.ipfs.io/how-to/run-ipfs-inside-docker/)
