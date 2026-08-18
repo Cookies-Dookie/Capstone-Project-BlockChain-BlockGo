@@ -63,6 +63,40 @@ const fetchPublic = async (endpoint, options = {}) => {
     return await response.json();
 };
 
+const fetchPublicUrl = async (url, options = {}) => {
+    const headers = { ...options.headers };
+    if (options.body && !(options.body instanceof FormData) && !headers['Content-Type']) {
+        headers['Content-Type'] = 'application/json';
+    }
+
+    const response = await fetch(url, {
+        ...options,
+        headers,
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.message || 'API Request Failed');
+    }
+    return await response.json();
+};
+
+const getBackendHealthUrl = () => {
+    const configuredBaseUrl = process.env.REACT_APP_BACKEND_BASE_URL;
+    if (configuredBaseUrl) {
+        const baseUrl = configuredBaseUrl.replace(/\/$/, '');
+        return baseUrl.endsWith('/api')
+            ? `${baseUrl}/backend/health`
+            : `${baseUrl}/api/backend/health`;
+    }
+
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '3000') {
+        return 'http://localhost:5000/api/backend/health';
+    }
+
+    return `${getBaseUrl('/backend/health')}/backend/health`;
+};
+
 // ==================== MIDDLEWARE API - LOGIN & AUTH ====================
 // These endpoints point to middleware.js running on port 4000
 // Middleware uses role-based wallet routing (registrar/5990, faculty/6990, department/7990)
@@ -252,6 +286,43 @@ export const batchUploadGrades = async (file, semester = '', schoolYear = '', co
 // ==================== MIDDLEWARE API - HEALTH CHECK ====================
 export const getHealthStatus = async () => {
     return await fetchPublic('/health');
+};
+
+export const getBackendHealthStatus = async () => {
+    return await fetchPublicUrl(getBackendHealthUrl());
+};
+
+export const fetchSystemMonitoringSummary = async ({ signal } = {}) => {
+    return await fetchWithAuth('/SystemMonitoring/summary', {
+        method: 'GET',
+        cache: 'no-store',
+        signal,
+    });
+};
+
+export const getFrontendHealthStatus = async () => {
+    if (typeof window === 'undefined') {
+        throw new Error('Frontend health is only available in the browser.');
+    }
+
+    const response = await fetch(`/nginx-health?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+            Accept: 'text/plain, text/html, application/json',
+        },
+    });
+
+    if (!response.ok) {
+        throw new Error(`Frontend health returned HTTP ${response.status}`);
+    }
+
+    const body = await response.text().catch(() => '');
+    return {
+        status: 'healthy',
+        service: 'blockgo-frontend',
+        path: '/nginx-health',
+        response: body.trim().slice(0, 120),
+    };
 };
 
 export const registerFabricUser = async ({ email, role, password }) => {
@@ -504,12 +575,41 @@ export const bulkUploadMasterlist = async (file, department = '') => {
     });
 };
 
-export const getDecryptedIpfsUrl = (cid, vaultPassword = '') => {
-    if (!cid) return "#";
+export const openDecryptedIpfsFile = async (cid, vaultPassword = '', targetWindow = null) => {
+    if (!cid) throw new Error('CID is required.');
+
     const token = localStorage.getItem('token');
-    let url = `/api/Grades/view-ipfs/${cid}?vaultPassword=${encodeURIComponent(vaultPassword)}&access_token=${token}`;
-    console.log("Constructed IPFS URL:", url);
+    const baseUrl = getBaseUrl('/Grades');
+    const viewerWindow = targetWindow || window.open('', '_blank');
+
+    if (!viewerWindow) {
+        throw new Error('Unable to open the IPFS viewer window.');
+    }
+
+    const response = await fetch(`${baseUrl}/Grades/view-ipfs/${encodeURIComponent(cid)}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+        },
+        body: JSON.stringify({ vaultPassword }),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || 'Failed to decrypt IPFS file.');
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    viewerWindow.location.href = url;
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60 * 1000);
     return url;
+};
+
+export const getDecryptedIpfsUrl = (cid) => {
+    if (!cid) return "#";
+    return `/api/Grades/view-ipfs/${encodeURIComponent(cid)}`;
 };
 
 export const uploadToIpfs = async (file) => {

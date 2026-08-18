@@ -105,7 +105,6 @@ function RegistrarSectionsCreated() {
     firstName: "",
     middleName: "",
   });
-  const [promotionSummary, setPromotionSummary] = useState(null);
   const [changedDepartments, setChangedDepartments] = useState(() => new Set());
 
   const persistBatches = (nextBatches) => {
@@ -664,15 +663,6 @@ function RegistrarSectionsCreated() {
     setIrregularAssignments(nextIrregularAssignments);
     localStorage.setItem(GRADUATING_STUDENTS_KEY, JSON.stringify(nextGraduatingStudents));
     localStorage.setItem(IRREGULAR_SUBJECTS_KEY, JSON.stringify(nextIrregularAssignments));
-    setPromotionSummary({
-      promoted: allPromotedStudents.length,
-      sections: targetBatches.reduce(
-        (total, batch) => total + (batch.sectionPlans || []).length,
-        0
-      ),
-      graduating: allGraduatingReviewList.length,
-      batches: rolloverBatches.length,
-    });
     alert(`${allPromotedStudents.length} students promoted successfully.`);
   };
 

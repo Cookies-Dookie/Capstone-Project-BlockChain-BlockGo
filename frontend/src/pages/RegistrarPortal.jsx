@@ -184,6 +184,7 @@ function RegistrarPortal({ onLogout, onResetEncodingSeason, allGrades = {} }) {
           <RegistrarSidebar
             activeTab={activeTab}
             setActiveTab={setActiveTab}
+            managementDefaultTab="monitoring"
           />
 
           <main className="flex-1 space-y-4">

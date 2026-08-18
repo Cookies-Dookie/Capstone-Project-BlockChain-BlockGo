@@ -12,8 +12,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --production
+# Install production dependencies exactly from the lockfile
+RUN npm ci --omit=dev
 
 # Copy the rest of the application
 COPY . .
@@ -24,6 +24,9 @@ EXPOSE 4000
 # Set environment defaults
 ENV PORT=4000
 ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=256 --expose-gc"
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD node -e "const http=require('http');const req=http.get({host:'127.0.0.1',port:process.env.PORT||4000,path:'/api/health',timeout:4000},res=>process.exit(res.statusCode===200?0:1));req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',()=>process.exit(1));"
 
 # Run the middleware
 CMD ["node", "middleware.js"]
