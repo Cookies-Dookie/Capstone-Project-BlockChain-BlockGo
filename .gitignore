@@ -30,6 +30,7 @@ temp/
 # =========================
 node_modules/
 **/node_modules/
+frontend/package-lock.json
 *.dll
 *.exe
 *.pdb
@@ -69,6 +70,7 @@ network/k8s/.tmp-k8s/
 fabric_deploy_*/
 network/postgres-data/
 network/ipfs/
+network/fabric-k8s-data/
 
 # Dynamic Chaincode Env
 chaincode/.env
