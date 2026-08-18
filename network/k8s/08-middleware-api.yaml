@@ -83,8 +83,8 @@ spec:
         env:
         - name: NODE_ENV
           value: production
-        - name: NODE_OPTIONS
-          value: "--max-old-space-size=256 --expose-gc"
+        - name: NODE_OPTIONS # Enforce strict memory limits for Node.js runtime
+          value: "--max-old-space-size=384 --expose-gc"
         - name: PORT
           value: "4000"
         - name: GATEWAY_CACHE_MAX_USERS
@@ -162,8 +162,8 @@ spec:
             exec:
               command: ["/bin/sh", "-c", "sleep 5"]
         startupProbe:
-          httpGet:
-            path: /api/health
+          httpGet: # Use /api/health for startup probe
+            path: /api/health 
             port: 4000
             scheme: HTTP
           periodSeconds: 5
@@ -179,8 +179,8 @@ spec:
           timeoutSeconds: 5
           failureThreshold: 3
         readinessProbe:
-          httpGet:
-            path: /api/ready
+          httpGet: # Use /api/ready for readiness probe (checks DB connectivity)
+            path: /api/ready 
             port: 4000
             scheme: HTTP
           initialDelaySeconds: 10
@@ -188,10 +188,10 @@ spec:
           timeoutSeconds: 3
           failureThreshold: 2
         resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
+          requests: # Set resource requests
+            memory: "300Mi"
+            cpu: "200m"
+          limits: # Set resource limits
             memory: "512Mi"
             cpu: "500m"
       volumes:
