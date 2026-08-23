@@ -60,6 +60,26 @@ data:
         target_label: pod
       - source_labels: [__meta_kubernetes_namespace]
         target_label: namespace
+    - job_name: 'middleware-services'
+      metrics_path: /metrics
+      kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+          - plv-fabric
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: auth-service|fabric-identity-service|ledger-service|grade-upload-service|settings-service
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: api
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: service
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
     - job_name: 'kube-state-metrics'
       static_configs:
       - targets:
@@ -89,8 +109,8 @@ data:
       rules:
       - alert: MiddlewareAPIMemoryUsageHigh
         expr: |
-          container_memory_working_set_bytes{namespace="plv-fabric",pod=~"middleware-api.*",container="middleware"}
-          / container_spec_memory_limit_bytes{namespace="plv-fabric",pod=~"middleware-api.*",container="middleware"} > 0.9
+          container_memory_working_set_bytes{namespace="plv-fabric",pod=~"(middleware-api|auth-service|fabric-identity-service|ledger-service|grade-upload-service|settings-service).*",container=~"api-gateway|auth-service|identity-service|ledger-service|upload-service|settings-service"}
+          / container_spec_memory_limit_bytes{namespace="plv-fabric",pod=~"(middleware-api|auth-service|fabric-identity-service|ledger-service|grade-upload-service|settings-service).*",container=~"api-gateway|auth-service|identity-service|ledger-service|upload-service|settings-service"} > 0.9
         for: 2m
         labels:
           severity: critical
@@ -100,7 +120,7 @@ data:
           description: "The middleware container is close to its memory limit. Check /metrics, pod logs, and heap snapshots if DEBUG_TOKEN is enabled."
       - alert: MiddlewareAPIMemoryGrowth
         expr: |
-          increase(container_memory_working_set_bytes{namespace="plv-fabric",pod=~"middleware-api.*",container="middleware"}[1h]) > 52428800
+          increase(container_memory_working_set_bytes{namespace="plv-fabric",pod=~"(middleware-api|auth-service|fabric-identity-service|ledger-service|grade-upload-service|settings-service).*"}[1h]) > 52428800
         for: 10m
         labels:
           severity: warning
@@ -110,7 +130,7 @@ data:
           description: "Sustained memory growth can indicate retained Fabric gateways, request buffers, or other leaked objects."
       - alert: MiddlewareGatewayCacheNearCapacity
         expr: |
-          blockgo_gateway_cache_entries{job="middleware-api"} / blockgo_gateway_cache_max_entries{job="middleware-api"} > 0.8
+          blockgo_gateway_cache_entries{job="middleware-services",service="ledger-service"} / blockgo_gateway_cache_max_entries{job="middleware-services",service="ledger-service"} > 0.8
         for: 5m
         labels:
           severity: warning
@@ -120,7 +140,7 @@ data:
           description: "The Fabric gateway cache is nearing its configured maximum. Verify user traffic and eviction logs."
       - alert: MiddlewareAPIPodRestarting
         expr: |
-          increase(kube_pod_container_status_restarts_total{namespace="plv-fabric",pod=~"middleware-api.*",container="middleware"}[15m]) > 1
+          increase(kube_pod_container_status_restarts_total{namespace="plv-fabric",pod=~"(middleware-api|auth-service|fabric-identity-service|ledger-service|grade-upload-service|settings-service).*"}[15m]) > 1
         for: 5m
         labels:
           severity: critical
@@ -148,6 +168,15 @@ data:
         annotations:
           summary: "Middleware API target {{ $labels.pod }} is down"
           description: "Prometheus cannot scrape middleware metrics. Check pod readiness and service discovery."
+      - alert: MiddlewareInternalServiceDown
+        expr: up{job="middleware-services"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: middleware-services
+        annotations:
+          summary: "Middleware service {{ $labels.service }} target {{ $labels.pod }} is down"
+          description: "Check the owning Deployment, its readiness endpoint, and its direct dependencies."
     - name: blockgo-platform
       interval: 30s
       rules:
@@ -218,6 +247,56 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
+  name: auth-service-pdb
+  namespace: plv-fabric
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: auth-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: fabric-identity-service-pdb
+  namespace: plv-fabric
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: fabric-identity-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ledger-service-pdb
+  namespace: plv-fabric
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: ledger-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: grade-upload-service-pdb
+  namespace: plv-fabric
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: grade-upload-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: settings-service-pdb
+  namespace: plv-fabric
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: settings-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
   name: orderer-pdb
   namespace: plv-main-campus
 spec:
@@ -252,7 +331,7 @@ spec:
     limits.cpu: "16"
     limits.memory: 32Gi
     pods: "30"
-    persistentvolumeclaims: "5"
+    persistentvolumeclaims: "10"
 ---
 apiVersion: v1
 kind: LimitRange

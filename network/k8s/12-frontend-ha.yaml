@@ -72,12 +72,16 @@ data:
 
       location ^~ /api/Grades { proxy_pass http://client_app; }
       location ^~ /api/Student { proxy_pass http://client_app; }
+      location ^~ /api/student { proxy_pass http://client_app; }
       location ^~ /api/GradeTemplate { proxy_pass http://client_app; }
       location ^~ /api/SystemSettings { proxy_pass http://client_app; }
       location ^~ /api/SystemMonitoring { proxy_pass http://client_app; }
       location ^~ /api/BulkUpload { proxy_pass http://client_app; }
       location ^~ /api/RegistrarDashboard { proxy_pass http://client_app; }
       location ^~ /api/Sectioning { proxy_pass http://client_app; }
+      location ^~ /api/AccountManagement { proxy_pass http://client_app; }
+      location ^~ /api/Curriculums { proxy_pass http://client_app; }
+      location ^~ /api/SupportTickets { proxy_pass http://client_app; }
       location ^~ /api/backend/health { proxy_pass http://client_app; }
       location ^~ /api/Auth { proxy_pass http://client_app; }
       location ^~ /api/registrar/ { proxy_pass http://client_app; }

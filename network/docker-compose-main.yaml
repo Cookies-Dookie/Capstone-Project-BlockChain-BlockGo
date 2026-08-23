@@ -2,6 +2,42 @@ networks:
   registrar-net:
     name: registrar-net
 
+x-middleware-common: &middleware-common
+  image: fabric-middleware:latest
+  build:
+    context: ../middleware
+    dockerfile: Dockerfile
+  env_file: .env
+  environment:
+    NODE_ENV: production
+    AUTH_SERVICE_URL: http://auth-service:4001
+    IDENTITY_SERVICE_URL: http://fabric-identity-service:4002
+    LEDGER_SERVICE_URL: http://ledger-service:4003
+    UPLOAD_SERVICE_URL: http://grade-upload-service:4004
+    SETTINGS_SERVICE_URL: http://settings-service:4005
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    CSHARP_API_URL: http://dotnet-container:5000
+    IPFS_API_URL: /dns4/ipfs0/tcp/5001/http
+    COUCHDB_WALLET_REGISTRAR_URL: http://couchdb_wallet_registrar:5984
+    COUCHDB_WALLET_FACULTY_URL: http://host.docker.internal:6990
+    COUCHDB_WALLET_DEPARTMENT_URL: http://host.docker.internal:7990
+    FABRIC_CA_REGISTRAR_URL: https://ca.registrar.capstone.com:7054
+    FABRIC_CA_FACULTY_URL: https://host.docker.internal:8054
+    FABRIC_CA_DEPARTMENT_URL: https://host.docker.internal:9054
+    FABRIC_CA_REGISTRAR_CERT: /network/fabric-ca/registrar/ca-cert.pem
+    FABRIC_CA_REGISTRAR_TLS_CERT: /network/fabric-ca/registrar/tls-cert.pem
+    FABRIC_CA_FACULTY_CERT: /network/fabric-ca/faculty/ca-cert.pem
+    FABRIC_CA_FACULTY_TLS_CERT: /network/fabric-ca/faculty/tls-cert.pem
+    FABRIC_CA_DEPARTMENT_CERT: /network/fabric-ca/department/ca-cert.pem
+    FABRIC_CA_DEPARTMENT_TLS_CERT: /network/fabric-ca/department/tls-cert.pem
+    FABRIC_GATEWAY_TLS_ROOTS: /etc/hyperledger/fabric-gateway-tls
+    CONNECTION_PROFILE_PATH: /app/connection.json
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  networks: [registrar-net]
+  restart: unless-stopped
+
 services:
   ca.registrar.capstone.com:
     image: hyperledger/fabric-ca:1.5.7
@@ -214,6 +250,36 @@ services:
       retries: 5
       start_period: 30s
 
+  postgres-migrations:
+    image: bitnami/postgresql:latest
+    container_name: blockgo-postgres-migrations
+    restart: "no"
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=${POSTGRES_USER}
+      - PGPASSWORD=${POSTGRES_PASS}
+      - PGDATABASE=${POSTGRES_DB}
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        shopt -s nullglob
+        migrations=(/migrations/[0-9][0-9][0-9]_*.sql)
+        if (( $${#migrations[@]} == 0 )); then
+          echo "No numbered database migrations were mounted." >&2
+          exit 1
+        fi
+        for migration in "$${migrations[@]}"; do
+          echo "Applying $$(basename "$$migration")"
+          psql --set ON_ERROR_STOP=1 --file "$$migration"
+        done
+    volumes:
+      - "../migrations:/migrations:ro"
+    networks: [registrar-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   redis:
     image: redis:7-alpine
     container_name: blockgo-redis
@@ -261,8 +327,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres-migrations:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -271,6 +337,67 @@ services:
       timeout: 5s
       retries: 20
       start_period: 60s
+
+  middleware-api:
+    <<: *middleware-common
+    container_name: blockgo-api-gateway
+    command: ["npm", "run", "start:gateway"]
+    ports: ["4000:4000"]
+    depends_on:
+      auth-service: { condition: service_started }
+      fabric-identity-service: { condition: service_started }
+      ledger-service: { condition: service_started }
+      grade-upload-service: { condition: service_started }
+      settings-service: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  auth-service:
+    <<: *middleware-common
+    container_name: blockgo-auth-service
+    command: ["npm", "run", "start:auth"]
+    depends_on:
+      postgres-migrations: { condition: service_completed_successfully }
+      fabric-identity-service: { condition: service_started }
+
+  fabric-identity-service:
+    <<: *middleware-common
+    container_name: blockgo-fabric-identity-service
+    command: ["npm", "run", "start:identity"]
+    volumes:
+      - ./fabric-ca:/network/fabric-ca:ro
+    depends_on:
+      couchdb_wallet_registrar: { condition: service_started }
+
+  ledger-service:
+    <<: *middleware-common
+    container_name: blockgo-ledger-service
+    command: ["npm", "run", "start:ledger"]
+    volumes:
+      - ./crypto-config-final-v2/peerOrganizations/registrar.capstone.com/peers/peer0.registrar.capstone.com/tls/ca.crt:/etc/hyperledger/fabric-gateway-tls/registrar-peer-ca.crt:ro
+      - ./crypto-config-final-v2/peerOrganizations/faculty.capstone.com/peers/peer0.faculty.capstone.com/tls/ca.crt:/etc/hyperledger/fabric-gateway-tls/faculty-peer-ca.crt:ro
+      - ./crypto-config-final-v2/peerOrganizations/department.capstone.com/peers/peer0.department.capstone.com/tls/ca.crt:/etc/hyperledger/fabric-gateway-tls/department-peer-ca.crt:ro
+      - ./crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/ca.crt:/etc/hyperledger/fabric-gateway-tls/orderer-ca.crt:ro
+    depends_on:
+      couchdb_wallet_registrar: { condition: service_started }
+
+  grade-upload-service:
+    <<: *middleware-common
+    container_name: blockgo-grade-upload-service
+    command: ["npm", "run", "start:upload"]
+    depends_on:
+      dotnet-container: { condition: service_healthy }
+
+  settings-service:
+    <<: *middleware-common
+    container_name: blockgo-settings-service
+    command: ["npm", "run", "start:settings"]
+    depends_on:
+      postgres-migrations: { condition: service_completed_successfully }
+
   registrar-chaincode:
     container_name: registrar-chaincode
     build:

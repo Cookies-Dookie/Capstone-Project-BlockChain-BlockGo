@@ -11,6 +11,7 @@ using NpgsqlTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace Client_app.Controllers
 {
@@ -22,6 +23,8 @@ namespace Client_app.Controllers
         private readonly ILogger<ChatHub> _logger;
         private readonly string _connectionString;
         private static readonly TimeSpan DatabaseHistoryDuration = TimeSpan.FromDays(30);
+        private static readonly SemaphoreSlim ChatSchemaLock = new(1, 1);
+        private static bool _chatSchemaReady;
 
         public ChatHub(IChatCache chatCache, IChatMessageEncryption encryption, IConfiguration configuration, ILogger<ChatHub> logger)
         {
@@ -43,18 +46,19 @@ namespace Client_app.Controllers
             
             await UpdateOnlineStatus(userEmail, true, resolvedRole);
             await MarkPendingIncomingMessagesDeliveredAsync(userEmail);
-            await Clients.All.SendAsync("OnlineStatusChanged", new { Email = userEmail, IsOnline = true });
+            await PresenceAudience(resolvedRole).SendAsync("OnlineStatusChanged", new { Email = userEmail, IsOnline = true });
             await SendContactsToCallerAsync(userEmail, resolvedRole);
 
             var onlineUsers = await _chatCache.GetOnlineStatusesAsync();
-            foreach (var user in onlineUsers.Where(u => !string.Equals(u.Email, userEmail, StringComparison.OrdinalIgnoreCase)))
+            foreach (var user in onlineUsers.Where(u =>
+                         !string.Equals(u.Email, userEmail, StringComparison.OrdinalIgnoreCase) &&
+                         IsAllowedChatTarget(resolvedRole, u.Role)))
             {
                 await Clients.Caller.SendAsync("UserJoined", new { user.Email, user.Role, user.FullName });
             }
             
-            await Clients.Others.SendAsync("UserJoined", new { Email = userEmail, Role = resolvedRole, FullName = userEmail.Split('@')[0] });
-            
-            await Clients.Others.SendAsync("RequestRollCall", userEmail);
+            await PresenceAudience(resolvedRole).SendAsync("UserJoined", new { Email = userEmail, Role = resolvedRole, FullName = userEmail.Split('@')[0] });
+            await PresenceAudience(resolvedRole).SendAsync("RequestRollCall", userEmail);
         }
 
         public async Task AnnouncePresence(string targetEmail)
@@ -63,6 +67,7 @@ namespace Client_app.Controllers
             var myRole = Context.User?.FindFirst("dbRole")?.Value ?? Context.User?.FindFirst(ClaimTypes.Role)?.Value ?? "student";
             if (string.IsNullOrEmpty(myEmail)) return;
 
+            await EnsureCanSendAsync(targetEmail);
             await Clients.Group($"private_{targetEmail}").SendAsync("UserJoined", new { Email = myEmail, Role = myRole, FullName = myEmail.Split('@')[0] });
         }
 
@@ -77,8 +82,9 @@ namespace Client_app.Controllers
 
                 if (!stillOnline)
                 {
-                    await Clients.All.SendAsync("OnlineStatusChanged", new { Email = userEmail, IsOnline = false });
-                    await Clients.Others.SendAsync("UserLeft", new { Email = userEmail });
+                    var role = ResolveRole();
+                    await PresenceAudience(role).SendAsync("OnlineStatusChanged", new { Email = userEmail, IsOnline = false });
+                    await PresenceAudience(role).SendAsync("UserLeft", new { Email = userEmail });
                 }
             }
             await base.OnDisconnectedAsync(exception);
@@ -167,6 +173,7 @@ namespace Client_app.Controllers
             
             if (!string.IsNullOrEmpty(senderEmail) && !string.IsNullOrEmpty(otherUserEmail))
             {
+                await EnsureCanSendAsync(otherUserEmail);
                 var history = await GetMergedHistoryAsync(senderEmail, otherUserEmail);
                 await Clients.Caller.SendAsync("ChatHistory", history);
             }
@@ -177,6 +184,8 @@ namespace Client_app.Controllers
             var viewerEmail = Context.User?.Identity?.Name ?? string.Empty;
 
             if (string.IsNullOrEmpty(viewerEmail) || string.IsNullOrEmpty(otherUserEmail)) return;
+
+            await EnsureCanSendAsync(otherUserEmail);
 
             var history = await GetMergedHistoryAsync(viewerEmail, otherUserEmail);
             await MarkConversationSeenAsync(viewerEmail, otherUserEmail, history);
@@ -514,6 +523,11 @@ namespace Client_app.Controllers
 
         private static async Task EnsureChatSchemaAsync(NpgsqlConnection conn)
         {
+            if (Volatile.Read(ref _chatSchemaReady)) return;
+            await ChatSchemaLock.WaitAsync();
+            try
+            {
+                if (Volatile.Read(ref _chatSchemaReady)) return;
             using var cmd = new NpgsqlCommand(@"
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id SERIAL PRIMARY KEY,
@@ -549,6 +563,12 @@ namespace Client_app.Controllers
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_pair_sent_at ON chat_messages(LOWER(sender_email), LOWER(receiver_email), sent_at);
                 DELETE FROM chat_messages WHERE COALESCE(sent_at, timestamp) < NOW() - INTERVAL '30 days';", conn);
             await cmd.ExecuteNonQueryAsync();
+                Volatile.Write(ref _chatSchemaReady, true);
+            }
+            finally
+            {
+                ChatSchemaLock.Release();
+            }
         }
 
         private async Task SendContactsToCallerAsync(string userEmail, string viewerRole)
@@ -584,6 +604,7 @@ namespace Client_app.Controllers
                     LEFT JOIN adminprofiles ap ON ap.user_id = u.id
                     WHERE LOWER(u.email) <> LOWER(@userEmail)
                       AND LOWER(u.status) = 'approved'
+                      AND u.is_active = TRUE
                     ORDER BY full_name, u.email;", conn);
                 cmd.Parameters.AddWithValue("userEmail", userEmail);
 
@@ -594,7 +615,7 @@ namespace Client_app.Controllers
                     var role = reader.GetString(1);
                     var hasConversation = reader.GetBoolean(3);
 
-                    if (!IsAllowedChatTarget(viewerRole, role) && !hasConversation) continue;
+                    if (!IsAllowedChatTarget(viewerRole, role)) continue;
 
                     var isOnline = onlineByEmail.TryGetValue(email, out var onlineStatus);
                     contacts.Add(new ChatUserStatus
@@ -641,7 +662,7 @@ namespace Client_app.Controllers
             {
                 using var conn = new NpgsqlConnection(_connectionString);
                 await conn.OpenAsync();
-                using var cmd = new NpgsqlCommand("SELECT role FROM users WHERE LOWER(email) = LOWER(@email) AND LOWER(status) = 'approved' LIMIT 1;", conn);
+                using var cmd = new NpgsqlCommand("SELECT role FROM users WHERE LOWER(email) = LOWER(@email) AND LOWER(status) = 'approved' AND is_active = TRUE LIMIT 1;", conn);
                 cmd.Parameters.AddWithValue("email", email);
                 return (await cmd.ExecuteScalarAsync())?.ToString() ?? string.Empty;
             }
@@ -659,13 +680,28 @@ namespace Client_app.Controllers
 
             if (viewer == "faculty") return target == "registrar" || target == "department_admin" || target == "faculty";
             if (viewer == "department_admin") return target == "registrar" || target == "faculty";
-            if (viewer == "registrar") return target == "department_admin" || target == "faculty" || target == "student";
+            if (viewer == "system_admin") return target == "registrar";
+            if (viewer == "registrar") return target == "system_admin" || target == "department_admin" || target == "faculty" || target == "student";
             return target == "registrar";
+        }
+
+        private IClientProxy PresenceAudience(string role)
+        {
+            var groups = NormalizeRole(role) switch
+            {
+                "system_admin" => new[] { "role_registrar" },
+                "registrar" => new[] { "role_system_admin", "role_department_admin", "role_faculty", "role_student" },
+                "faculty" => new[] { "role_registrar", "role_department_admin", "role_faculty" },
+                "department_admin" => new[] { "role_registrar", "role_faculty" },
+                _ => new[] { "role_registrar" }
+            };
+            return Clients.Groups(groups);
         }
 
         private static string NormalizeRole(string? role)
         {
             var value = (role ?? string.Empty).ToLowerInvariant();
+            if (value.Contains("system_admin") || value.Contains("system admin") || value.Contains("systemadmin")) return "system_admin";
             if (value.Contains("registrar")) return "registrar";
             if (value.Contains("faculty")) return "faculty";
             if (value.Contains("deptadmin") || value.Contains("dept_admin") || value.Contains("department_admin") || value.Contains("department admin") || value.Contains("admin")) return "department_admin";

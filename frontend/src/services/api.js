@@ -153,6 +153,48 @@ export const updateStudentProfile = async (profileData) => {
     });
 };
 
+export const fetchStudentHistoricalGrades = async () => fetchWithAuth('/Student/grades');
+export const fetchStudentBlockchainTransactions = async () => fetchWithAuth('/Student/blockchain-transactions');
+
+// ==================== MANAGED ACCOUNTS ====================
+export const createStaffAccount = async (account) => fetchWithAuth('/AccountManagement/staff', {
+    method: 'POST',
+    body: JSON.stringify(account),
+});
+export const fetchRegistrarAccounts = async () => fetchWithAuth('/AccountManagement/registrars');
+export const createRegistrarAccount = async (account) => fetchWithAuth('/AccountManagement/registrars', {
+    method: 'POST',
+    body: JSON.stringify(account),
+});
+export const updateRegistrarAccount = async (userId, changes) => fetchWithAuth(`/AccountManagement/registrars/${encodeURIComponent(userId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(changes),
+});
+
+// ==================== CURRICULUM CHECKLISTS ====================
+export const fetchAcademicPrograms = async () => fetchWithAuth('/Curriculums/programs');
+export const fetchCurriculums = async (status = '') => fetchWithAuth(`/Curriculums${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+export const fetchCurriculum = async (id) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}`);
+export const createCurriculum = async (curriculum) => fetchWithAuth('/Curriculums', { method: 'POST', body: JSON.stringify(curriculum) });
+export const updateCurriculum = async (id, curriculum) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(curriculum) });
+export const addCurriculumSubject = async (id, subject) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/subjects`, { method: 'POST', body: JSON.stringify(subject) });
+export const updateCurriculumSubject = async (id, subjectId, subject) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/subjects/${encodeURIComponent(subjectId)}`, { method: 'PUT', body: JSON.stringify(subject) });
+export const removeCurriculumSubject = async (id, subjectId) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/subjects/${encodeURIComponent(subjectId)}`, { method: 'DELETE' });
+export const submitCurriculum = async (id) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/submit`, { method: 'POST' });
+export const approveCurriculum = async (id) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+export const returnCurriculum = async (id, reason) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/return`, { method: 'POST', body: JSON.stringify({ reason }) });
+export const publishCurriculum = async (id) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/publish`, { method: 'POST' });
+export const archiveCurriculum = async (id) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/archive`, { method: 'POST' });
+export const assignStudentCurriculum = async (id, studentEmail) => fetchWithAuth(`/Curriculums/${encodeURIComponent(id)}/students`, { method: 'PUT', body: JSON.stringify({ studentEmail }) });
+export const fetchStudentCurriculum = async () => fetchWithAuth('/Curriculums/student');
+export const fetchFacultyCurriculums = async () => fetchWithAuth('/Curriculums/faculty');
+
+// ==================== REGISTRAR SUPPORT TICKETS ====================
+export const fetchSupportTickets = async () => fetchWithAuth('/SupportTickets');
+export const createSupportTicket = async (ticket) => fetchWithAuth('/SupportTickets', { method: 'POST', body: JSON.stringify(ticket) });
+export const updateSupportTicket = async (id, update) => fetchWithAuth(`/SupportTickets/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(update) });
+export const resolveSecurityEvent = async (id) => fetchWithAuth(`/SystemMonitoring/security-events/${encodeURIComponent(id)}/resolve`, { method: 'POST' });
+
 // ==================== GRADES API - C# STAGING + BLOCKCHAIN LEDGER ====================
 export const getAllGrades = async (invokerId = 'system') => {
     return await fetchWithAuth(`/Grades/all?invokerId=${encodeURIComponent(invokerId)}`);
@@ -536,11 +578,16 @@ export const batchEnrollStudentsToSection = async (file, sectionId) => {
     });
 };
 
-export const batchUploadStudents = async (file, defaultDepartment = '', mode = 'enroll') => {
+export const batchUploadStudents = async (file, defaultDepartment = '', mode = 'enroll', enrollment = {}) => {
     const formData = new FormData();
     formData.append('file', file);
     if (defaultDepartment) formData.append('defaultDepartment', defaultDepartment);
     formData.append('mode', mode);
+    if (enrollment.curriculumId) formData.append('curriculumId', String(enrollment.curriculumId));
+    if (enrollment.schoolYear) formData.append('schoolYear', enrollment.schoolYear);
+    if (enrollment.semester) formData.append('semester', enrollment.semester);
+    if (enrollment.yearLevel) formData.append('yearLevel', String(enrollment.yearLevel));
+    if (enrollment.section) formData.append('section', enrollment.section);
 
     return await fetchWithAuth(`/Auth/students/bulk-upload`, {
         method: 'POST',
@@ -548,20 +595,20 @@ export const batchUploadStudents = async (file, defaultDepartment = '', mode = '
     });
 };
 
-export const bulkEnrollStudents = async (file, defaultDepartment = '') => {
-    return await batchUploadStudents(file, defaultDepartment, 'enroll');
+export const bulkEnrollStudents = async (file, defaultDepartment = '', enrollment = {}) => {
+    return await batchUploadStudents(file, defaultDepartment, 'enroll', enrollment);
 };
 
-export const registrarBulkEnrollStudents = async (file, department = '') => {
-    return await bulkEnrollStudents(file, department);
+export const registrarBulkEnrollStudents = async (file, department = '', enrollment = {}) => {
+    return await bulkEnrollStudents(file, department, enrollment);
 };
 
-export const bulkUpdateStudents = async (file, defaultDepartment = '') => {
-    return await batchUploadStudents(file, defaultDepartment, 'update');
+export const bulkUpdateStudents = async (file, defaultDepartment = '', enrollment = {}) => {
+    return await batchUploadStudents(file, defaultDepartment, 'update', enrollment);
 };
 
-export const registrarBulkUpdateStudents = async (file, department = '') => {
-    return await bulkUpdateStudents(file, department);
+export const registrarBulkUpdateStudents = async (file, department = '', enrollment = {}) => {
+    return await bulkUpdateStudents(file, department, enrollment);
 };
 
 export const bulkUploadMasterlist = async (file, department = '') => {

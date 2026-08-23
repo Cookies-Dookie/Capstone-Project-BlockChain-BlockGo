@@ -5,6 +5,7 @@ import { pullSharedClientState } from '../../utils/sharedClientState';
 
 const roleKeyFromRoleString = (role) => {
   const r = (role || '').toLowerCase();
+  if (r.includes('system_admin') || r.includes('system admin') || r.includes('systemadmin')) return 'system_admin';
   if (r.includes('registrar')) return 'registrar';
   if (r.includes('faculty')) return 'faculty';
   if (
@@ -621,7 +622,8 @@ const Chat = ({
   const allowedTargetsByViewer = (viewerKey) => {
     if (viewerKey === 'faculty') return new Set(['registrar', 'department_admin', 'faculty']);
     if (viewerKey === 'department_admin') return new Set(['registrar', 'faculty']);
-    if (viewerKey === 'registrar') return new Set(['department_admin', 'faculty', 'student']);
+    if (viewerKey === 'system_admin') return new Set(['registrar']);
+    if (viewerKey === 'registrar') return new Set(['system_admin', 'department_admin', 'faculty', 'student']);
     return new Set(['registrar']);
   };
 
@@ -645,6 +647,7 @@ const Chat = ({
       faculty: [],
       student: [],
       registrar: [],
+      system_admin: [],
     };
     for (const u of onlineCandidates) {
       const rk = roleKeyFromRoleString(u.role || '');
@@ -655,7 +658,7 @@ const Chat = ({
   }, [onlineCandidates]);
 
   const allowedGroupOrder = useMemo(() => {
-    return ['department_admin', 'faculty', 'student', 'registrar'].filter((k) => {
+    return ['system_admin', 'department_admin', 'faculty', 'student', 'registrar'].filter((k) => {
       const setHas = allowedTargets.has(k);
       return setHas;
     });
@@ -828,6 +831,7 @@ const Chat = ({
     if (key === 'faculty') return 'Faculties';
     if (key === 'student') return 'Students';
     if (key === 'registrar') return 'Registrar';
+    if (key === 'system_admin') return 'System Administrator';
     return key;
   };
 

@@ -1,15 +1,20 @@
 import React, { useState } from 'react';
 import plvlogo from '../../assets/plvlogo.png';
 import SystemMonitoring from './SystemMonitoring';
+import RegistrarAccountManagement from './RegistrarAccountManagement';
+import SupportTicketManagement from './SupportTicketManagement';
 
 const navigationItems = [
   { id: 'overview', label: 'Overview' },
+  { id: 'registrars', label: 'Registrar Accounts' },
+  { id: 'tickets', label: 'Error Reports' },
+  { id: 'chat', label: 'Registrar Chat' },
   { id: 'services', label: 'Services' },
   { id: 'infrastructure', label: 'Infrastructure & Data' },
   { id: 'alerts', label: 'Alerts' },
 ];
 
-function SystemAdminPortal({ adminData, onLogout }) {
+function SystemAdminPortal({ adminData, onLogout, chatUnreadCount = 0, onOpenChat }) {
   const [activeView, setActiveView] = useState('overview');
 
   return (
@@ -58,7 +63,7 @@ function SystemAdminPortal({ adminData, onLogout }) {
                       : 'border-transparent text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  {item.label}
+                {item.label}{item.id === 'chat' && chatUnreadCount > 0 ? ` (${chatUnreadCount > 9 ? '9+' : chatUnreadCount})` : ''}
                 </button>
               );
             })}
@@ -67,7 +72,25 @@ function SystemAdminPortal({ adminData, onLogout }) {
 
         <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
           <div className="mx-auto w-full max-w-[1500px]">
-            <SystemMonitoring activeView={activeView} />
+            {activeView === 'registrars' ? (
+              <RegistrarAccountManagement />
+            ) : activeView === 'tickets' ? (
+              <SupportTicketManagement />
+            ) : activeView === 'chat' ? (
+              <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-xl font-bold text-[#003366]">System Administrator and Registrar Chat</h2>
+                <p className="mt-2 text-sm text-slate-600">Only Registrar accounts are available in this conversation list.</p>
+                <button
+                  type="button"
+                  onClick={onOpenChat}
+                  className="mt-5 rounded-lg bg-[#003366] px-5 py-2.5 font-bold text-white"
+                >
+                  Open Chat{chatUnreadCount > 0 ? ` (${chatUnreadCount} unread)` : ''}
+                </button>
+              </section>
+            ) : (
+              <SystemMonitoring activeView={activeView} />
+            )}
           </div>
         </main>
       </div>

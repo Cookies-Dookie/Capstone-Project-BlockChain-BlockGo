@@ -17,6 +17,8 @@ namespace Client_app.Controllers
         private readonly string _connectionString;
         private readonly ILogger<SystemSettingsController> _logger;
         private readonly IHubContext<ChatHub> _chatHubContext;
+        private static readonly object SchemaInitializationLock = new();
+        private static bool _schemaInitialized;
 
         public SystemSettingsController(IConfiguration configuration, ILogger<SystemSettingsController> logger, IHubContext<ChatHub> chatHubContext)
         {
@@ -28,18 +30,27 @@ namespace Client_app.Controllers
 
         private void EnsureTableExists()
         {
-            try
+            if (System.Threading.Volatile.Read(ref _schemaInitialized)) return;
+            lock (SchemaInitializationLock)
             {
-                using var conn = new NpgsqlConnection(_connectionString);
-                conn.Open();
-                using var cmd = new NpgsqlCommand(@"
-                    CREATE TABLE IF NOT EXISTS SystemSettings (
-                        key VARCHAR(255) PRIMARY KEY,
-                        value TEXT NOT NULL
-                    );", conn);
-                cmd.ExecuteNonQuery();
+                if (System.Threading.Volatile.Read(ref _schemaInitialized)) return;
+                try
+                {
+                    using var conn = new NpgsqlConnection(_connectionString);
+                    conn.Open();
+                    using var cmd = new NpgsqlCommand(@"
+                        CREATE TABLE IF NOT EXISTS SystemSettings (
+                            key VARCHAR(255) PRIMARY KEY,
+                            value TEXT NOT NULL
+                        );", conn);
+                    cmd.ExecuteNonQuery();
+                    System.Threading.Volatile.Write(ref _schemaInitialized, true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "System settings schema initialization was deferred.");
+                }
             }
-            catch { /* Ignore */ }
         }
 
         public class SettingRequest

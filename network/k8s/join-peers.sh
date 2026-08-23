@@ -6,8 +6,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+PROFILE="${K8S_PROFILE:-local}"
 CHANNEL_NAME="${1:-registrar-channel}"
 CHANNEL_BLOCK="./channel-artifacts-final/${CHANNEL_NAME}.block"
+
+if [[ "$PROFILE" == "local" ]]; then
+    export KUBECTL_REMOTE_COMMAND_WEBSOCKETS="${KUBECTL_REMOTE_COMMAND_WEBSOCKETS:-false}"
+fi
 
 [[ -f "$CHANNEL_BLOCK" ]] || {
     echo "ERROR: Channel block not found: $CHANNEL_BLOCK" >&2

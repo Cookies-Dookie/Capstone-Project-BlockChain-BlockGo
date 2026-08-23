@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 
 PROFILE="${K8S_PROFILE:-local}"
 ACTION="${1:-apply}"
-export PROFILE
+ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-20m}"
 
 if [[ "${1:-}" == "local" || "${1:-}" == "production" ]]; then
     PROFILE="$1"
@@ -42,6 +42,16 @@ case "$ACTION" in
         ;;
 esac
 
+export PROFILE
+export K8S_PROFILE="$PROFILE"
+
+# Docker Desktop 4.80 with Kubernetes 1.36 cannot proxy the default WebSocket
+# remote-command transport to cri-dockerd. Keep the local bootstrap usable via
+# the compatible SPDY transport; callers can explicitly override this setting.
+if [[ "$PROFILE" == "local" ]]; then
+    export KUBECTL_REMOTE_COMMAND_WEBSOCKETS="${KUBECTL_REMOTE_COMMAND_WEBSOCKETS:-false}"
+fi
+
 NAMESPACES=(plv-fabric plv-main-campus plv-annex-campus plv-pubad-campus)
 TMP_K8S_DIR="./k8s/.tmp-k8s"
 LOCAL_STATIC_PVS=(
@@ -53,10 +63,13 @@ LOCAL_STATIC_PVS=(
     pv-fabric-ca-department
     pv-peer-registrar-1
     pv-couchdb-registrar-1
+    pv-couchdb-wallet-registrar
     pv-peer-faculty-1
     pv-couchdb-faculty-1
+    pv-couchdb-wallet-faculty
     pv-peer-department-1
     pv-couchdb-department-1
+    pv-couchdb-wallet-department
     pv-postgres-main
     pv-ipfs-1
     pv-ipfs-2
@@ -136,14 +149,195 @@ local_pv_root() {
     echo "$path"
 }
 
+local_recovery_path_for_claim() {
+    local pv_root="$1"
+    local namespace="$2"
+    local claim="$3"
+
+    case "$claim" in
+        couchdb-wallet-storage-couchdb-wallet-registrar-0)
+            echo "${pv_root}/fabric-k8s-data/couchdb-wallet-registrar"
+            ;;
+        couchdb-wallet-storage-couchdb-wallet-faculty-0)
+            echo "${pv_root}/fabric-k8s-data/couchdb-wallet-faculty"
+            ;;
+        couchdb-wallet-storage-couchdb-wallet-department-0)
+            echo "${pv_root}/fabric-k8s-data/couchdb-wallet-department"
+            ;;
+        *)
+            echo "${pv_root}/fabric-k8s-data/recovered/${namespace}/${claim}"
+            ;;
+    esac
+}
+
+repair_lost_local_pvcs() {
+    if [[ "$PROFILE" != "local" ]]; then
+        return
+    fi
+
+    local pv_root
+    pv_root="$(local_pv_root)"
+    local namespace
+    local claim
+    local volume
+    local claim_uid
+    local storage_class
+    local storage_size
+    local recovery_path
+    local referenced_namespace
+    local referenced_claim
+    local phase
+
+    for namespace in "${NAMESPACES[@]}"; do
+        while IFS= read -r claim; do
+            [[ -z "$claim" ]] && continue
+
+            volume="$(kubectl get pvc "$claim" -n "$namespace" -o jsonpath='{.spec.volumeName}')"
+            claim_uid="$(kubectl get pvc "$claim" -n "$namespace" -o jsonpath='{.metadata.uid}')"
+            storage_class="$(kubectl get pvc "$claim" -n "$namespace" -o jsonpath='{.spec.storageClassName}')"
+            storage_size="$(kubectl get pvc "$claim" -n "$namespace" -o jsonpath='{.spec.resources.requests.storage}')"
+
+            if [[ -z "$volume" || -z "$claim_uid" || -z "$storage_class" || -z "$storage_size" ]]; then
+                echo "ERROR: Lost PVC ${namespace}/${claim} is missing binding metadata and cannot be repaired safely."
+                return 1
+            fi
+
+            echo "Repairing Lost PVC ${namespace}/${claim} (volume ${volume})..."
+            if kubectl get pv "$volume" >/dev/null 2>&1; then
+                referenced_namespace="$(kubectl get pv "$volume" -o jsonpath='{.spec.claimRef.namespace}')"
+                referenced_claim="$(kubectl get pv "$volume" -o jsonpath='{.spec.claimRef.name}')"
+                if [[ "$referenced_namespace" != "$namespace" || "$referenced_claim" != "$claim" ]]; then
+                    echo "ERROR: PV ${volume} is reserved for ${referenced_namespace}/${referenced_claim}; refusing to reassign it."
+                    return 1
+                fi
+                kubectl patch pv "$volume" --type=merge \
+                    -p "{\"spec\":{\"claimRef\":{\"apiVersion\":\"v1\",\"kind\":\"PersistentVolumeClaim\",\"name\":\"${claim}\",\"namespace\":\"${namespace}\",\"uid\":\"${claim_uid}\"}}}" >/dev/null
+            else
+                recovery_path="$(local_recovery_path_for_claim "$pv_root" "$namespace" "$claim")"
+                echo "The old dynamic PV is gone; recreating ${volume} at retained path ${recovery_path}."
+                cat <<EOF | kubectl apply -f - >/dev/null
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ${volume}
+spec:
+  capacity:
+    storage: ${storage_size}
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ${storage_class}
+  claimRef:
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    namespace: ${namespace}
+    name: ${claim}
+    uid: ${claim_uid}
+  hostPath:
+    path: ${recovery_path}
+    type: DirectoryOrCreate
+EOF
+            fi
+
+            phase=""
+            for _ in $(seq 1 30); do
+                phase="$(kubectl get pvc "$claim" -n "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+                [[ "$phase" == "Bound" ]] && break
+                sleep 2
+            done
+            if [[ "$phase" != "Bound" ]]; then
+                echo "ERROR: PVC ${namespace}/${claim} remained ${phase:-Unknown} after recovery."
+                kubectl describe pvc "$claim" -n "$namespace" || true
+                return 1
+            fi
+        done < <(
+            kubectl get pvc -n "$namespace" \
+                -o jsonpath='{range .items[?(@.status.phase=="Lost")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
+        )
+    done
+}
+
 wait_rollout() {
     local resource="$1"
     local namespace="$2"
     if kubectl get "$resource" -n "$namespace" >/dev/null 2>&1; then
-        kubectl rollout status "$resource" -n "$namespace" --timeout=10m
+        if ! kubectl rollout status "$resource" -n "$namespace" --timeout="$ROLLOUT_TIMEOUT"; then
+            echo "ERROR: ${resource} did not become ready in ${namespace}."
+            kubectl get pods -n "$namespace" -o wide || true
+            kubectl get pvc -n "$namespace" || true
+            kubectl get events -n "$namespace" --sort-by=.lastTimestamp | tail -n 30 || true
+            return 1
+        fi
     else
         echo "Resource $resource not found in $namespace. Skipping rollout wait."
     fi
+}
+
+show_job_logs() {
+    local job_name="$1"
+    local namespace="$2"
+    local pod
+    local found=false
+
+    while IFS= read -r pod; do
+        [[ -z "$pod" ]] && continue
+        found=true
+        echo "Logs for ${namespace}/${pod}:"
+        kubectl logs "$pod" -n "$namespace" --all-containers=true --prefix=true || true
+    done < <(
+        kubectl get pods -n "$namespace" -l "job-name=${job_name}" -o name 2>/dev/null || true
+    )
+
+    if [[ "$found" != "true" ]]; then
+        echo "No pods remain for Job ${namespace}/${job_name}."
+    fi
+}
+
+show_job_diagnostics() {
+    local job_name="$1"
+    local namespace="$2"
+
+    show_job_logs "$job_name" "$namespace"
+    kubectl describe job "$job_name" -n "$namespace" || true
+    kubectl get pods -n "$namespace" -l "job-name=${job_name}" -o wide || true
+    kubectl get events -n "$namespace" --sort-by=.lastTimestamp | tail -n 40 || true
+}
+
+wait_for_job_completion() {
+    local job_name="$1"
+    local namespace="$2"
+    local timeout_seconds="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    local succeeded
+    local failed_condition
+
+    while (( SECONDS < deadline )); do
+        if ! kubectl get job "$job_name" -n "$namespace" >/dev/null 2>&1; then
+            echo "ERROR: Job ${namespace}/${job_name} disappeared while waiting for completion."
+            return 1
+        fi
+
+        succeeded="$(kubectl get job "$job_name" -n "$namespace" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)"
+        if [[ "${succeeded:-0}" =~ ^[1-9][0-9]*$ ]]; then
+            return 0
+        fi
+
+        failed_condition="$(
+            kubectl get job "$job_name" -n "$namespace" \
+                -o jsonpath='{range .status.conditions[?(@.type=="Failed")]}{.status}{"|"}{.reason}{"|"}{.message}{end}' \
+                2>/dev/null || true
+        )"
+        if [[ "${failed_condition%%|*}" == "True" ]]; then
+            echo "ERROR: Job ${namespace}/${job_name} failed: ${failed_condition}"
+            return 1
+        fi
+
+        sleep 3
+    done
+
+    echo "ERROR: Timed out after ${timeout_seconds}s waiting for Job ${namespace}/${job_name}."
+    return 1
 }
 
 append_default() {
@@ -253,11 +447,25 @@ EOF
         exit 1
     fi
 
+    if ! compgen -G "../migrations/[0-9][0-9][0-9]_*.sql" >/dev/null; then
+        echo "ERROR: No numbered PostgreSQL migrations were found in ../migrations."
+        exit 1
+    fi
+
     for ns in plv-main-campus plv-annex-campus plv-pubad-campus; do
         kubectl create configmap postgres-init-script \
-            --from-file=init.sql=./init-db-schema.sql \
+            --from-file=00-base-schema.sql=./init-db-schema.sql \
             -n "$ns" --dry-run=client -o yaml | kubectl apply -f -
     done
+
+    local migration_config_args=()
+    local migration_file
+    for migration_file in ../migrations/[0-9][0-9][0-9]_*.sql; do
+        migration_config_args+=("--from-file=$(basename "$migration_file")=$migration_file")
+    done
+    kubectl create configmap postgres-runtime-migrations \
+        "${migration_config_args[@]}" \
+        -n plv-main-campus --dry-run=client -o yaml | kubectl apply -f -
 
     if [[ ! -f "./swarm.key" ]]; then
         echo "Generating missing IPFS swarm.key for this environment."
@@ -281,7 +489,6 @@ EOF
 
     copy_key_if_missing "$clean_env" BOOTSTRAP_REGISTRAR_PASS BOOTSTRAP_REGISTRAR_PASSWORD
     copy_key_if_missing "$clean_env" BOOTSTRAP_REGISTRAR_PASSWORD BOOTSTRAP_REGISTRAR_PASS
-    copy_key_if_missing "$clean_env" BOOTSTRAP_SYSTEM_ADMIN_EMAIL SYSTEM_ADMIN_EMAIL
     copy_key_if_missing "$clean_env" BOOTSTRAP_SYSTEM_ADMIN_PASS BOOTSTRAP_SYSTEM_ADMIN_PASSWORD
     copy_key_if_missing "$clean_env" BOOTSTRAP_SYSTEM_ADMIN_PASSWORD BOOTSTRAP_SYSTEM_ADMIN_PASS
     copy_key_if_missing "$clean_env" FABRIC_CA_REGISTRAR_PASS BOOTSTRAP_REGISTRAR_PASS
@@ -292,7 +499,7 @@ EOF
         copy_key_if_missing "$clean_env" VAULT_PASSWORD BOOTSTRAP_REGISTRAR_PASS
     fi
 
-    require_keys "$clean_env" IPFS_ENCRYPTION_KEY JWT_SECRET INTERNAL_API_KEY BOOTSTRAP_REGISTRAR_PASS BOOTSTRAP_SYSTEM_ADMIN_PASS BOOTSTRAP_SYSTEM_ADMIN_PASSWORD VAULT_PASSWORD
+    require_keys "$clean_env" IPFS_ENCRYPTION_KEY JWT_SECRET INTERNAL_API_KEY BOOTSTRAP_REGISTRAR_PASS BOOTSTRAP_SYSTEM_ADMIN_PASS VAULT_PASSWORD
     require_keys "$clean_env" FABRIC_CA_REGISTRAR_PASS FABRIC_CA_FACULTY_PASS FABRIC_CA_DEPARTMENT_PASS
 
     if [[ "$PROFILE" == "production" ]]; then
@@ -366,31 +573,291 @@ prepare_manifests() {
         sed -i "s|registry.example.com/plv-repo/||g" "$TMP_K8S_DIR"/*.yaml
         sed -i 's/imagePullPolicy: Always/imagePullPolicy: Never/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/value: file/value: none/g' "$TMP_K8S_DIR"/06-orderer*.yaml
+        sed -i '/- name: ORDERER_ADMIN_TLS_ENABLED/{n;s/value: "true"/value: "false"/;}' "$TMP_K8S_DIR"/06-orderer*.yaml
         sed -i 's/storage: 100Gi/storage: 10Gi/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/storage: 50Gi/storage: 10Gi/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/storage: 30Gi/storage: 10Gi/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/storage: 20Gi/storage: 10Gi/g' "$TMP_K8S_DIR"/*.yaml
-        sed -i '0,/replicas: 3/s//replicas: 1/' "$TMP_K8S_DIR/08-middleware-api.yaml"
-        sed -i '/- name: FABRIC_CA_INSECURE_TLS/{n;s/value: "false"/value: "true"/;}' "$TMP_K8S_DIR/08-middleware-api.yaml"
+        sed -i 's/replicas: [23]/replicas: 1/g' "$TMP_K8S_DIR/08-middleware-api.yaml"
+        sed -i 's/FABRIC_CA_INSECURE_TLS: "false"/FABRIC_CA_INSECURE_TLS: "true"/' "$TMP_K8S_DIR/08-middleware-api.yaml"
         sed -i '/- name: IPFS_RUN_AS_ROOT/{n;s/value: "false"/value: "true"/;}' "$TMP_K8S_DIR/09-ipfs.yaml"
     else
         echo "Preparing production manifests without local image or storage rewrites."
     fi
 }
 
-deploy_manifests() {
+prepare_local_middleware_image() {
+    if [[ "$PROFILE" != "local" ]]; then
+        return
+    fi
+
+    echo "Building the local middleware microservices image (Docker cache enabled)..."
+    docker build \
+        -t fabric-middleware:latest \
+        -f ../middleware/Dockerfile \
+        ../middleware
+
+    echo "Validating middleware microservice entrypoints..."
+    docker run --rm --entrypoint node fabric-middleware:latest -e '
+        const scripts = require("/app/package.json").scripts || {};
+        const required = ["start:gateway", "start:auth", "start:identity", "start:ledger", "start:upload", "start:settings"];
+        const missing = required.filter((name) => !scripts[name]);
+        if (missing.length > 0) {
+            console.error(`Missing middleware scripts: ${missing.join(", ")}`);
+            process.exit(1);
+        }
+        console.log("All middleware microservice entrypoints are present.");
+    '
+}
+
+configure_local_application_rollouts() {
+    if [[ "$PROFILE" != "local" ]]; then
+        return
+    fi
+
+    echo "Configuring one-pod local application deployments without rollout surge..."
+    local deployment
+    local deployments=(
+        middleware-api
+        auth-service
+        fabric-identity-service
+        ledger-service
+        grade-upload-service
+        settings-service
+        client-app
+        frontend
+    )
+
+    for deployment in "${deployments[@]}"; do
+        kubectl patch deployment "$deployment" -n plv-fabric --type=merge \
+            -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+    done
+
+    kubectl patch deployment registrar-chaincode -n plv-main-campus --type=merge \
+        -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+    kubectl patch deployment faculty-chaincode -n plv-annex-campus --type=merge \
+        -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+    kubectl patch deployment department-chaincode -n plv-pubad-campus --type=merge \
+        -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+}
+
+restart_deployment_and_wait() {
+    local deployment="$1"
+    local namespace="$2"
+
+    echo "Restarting ${namespace}/deployment/${deployment}..."
+    kubectl rollout restart "deployment/${deployment}" -n "$namespace" >/dev/null
+    wait_rollout "deployment/${deployment}" "$namespace"
+}
+
+deploy_orderer() {
+    local manifest="$1"
+    local deployment="$2"
+    local namespace="$3"
+
+    apply_manifest "$manifest"
+    restart_deployment_and_wait "$deployment" "$namespace"
+}
+
+deploy_orderers_sequentially() {
+    local orderers=(
+        "$TMP_K8S_DIR/06-orderer-1.yaml|orderer-1|plv-main-campus"
+        "$TMP_K8S_DIR/06-orderer-2.yaml|orderer-2|plv-main-campus"
+        "$TMP_K8S_DIR/06-orderer-3.yaml|orderer-3|plv-annex-campus"
+    )
+    local -A deployed=()
+    local entry
+    local manifest
+    local deployment
+    local namespace
+    local desired
+    local current
+    local scheduled
+
+    echo "Recovering interrupted orderer rollouts before normal sequential updates..."
+    for entry in "${orderers[@]}"; do
+        IFS='|' read -r manifest deployment namespace <<< "$entry"
+        if ! kubectl get deployment "$deployment" -n "$namespace" >/dev/null 2>&1; then
+            continue
+        fi
+
+        desired="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}')"
+        current="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.status.replicas}')"
+        scheduled="$(
+            kubectl get pods -n "$namespace" -l "app=${deployment}" \
+                -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' |
+                awk 'NF { count++ } END { print count + 0 }'
+        )"
+        desired="${desired:-0}"
+        current="${current:-0}"
+        scheduled="${scheduled:-0}"
+
+        if (( scheduled > desired )); then
+            echo "${namespace}/deployment/${deployment} has ${scheduled} scheduled pods (${current} replica objects) for desired ${desired}; reconciling it first."
+            deploy_orderer "$manifest" "$deployment" "$namespace"
+            deployed["$deployment"]=true
+        fi
+    done
+
+    echo "Deploying remaining orderers sequentially..."
+    for entry in "${orderers[@]}"; do
+        IFS='|' read -r manifest deployment namespace <<< "$entry"
+        if [[ "${deployed[$deployment]:-}" == "true" ]]; then
+            continue
+        fi
+        deploy_orderer "$manifest" "$deployment" "$namespace"
+    done
+}
+
+configure_orderer_channel_endpoint_aliases() {
+    local orderer_one_ip
+    local orderer_two_ip
+    local orderer_three_ip
+    local patch
+    local entry
+    local deployment
+    local namespace
+
+    orderer_one_ip="$(kubectl get service orderer-1 -n plv-main-campus -o jsonpath='{.spec.clusterIP}')"
+    orderer_two_ip="$(kubectl get service orderer-2 -n plv-main-campus -o jsonpath='{.spec.clusterIP}')"
+    orderer_three_ip="$(kubectl get service orderer-3 -n plv-annex-campus -o jsonpath='{.spec.clusterIP}')"
+
+    if [[ -z "$orderer_one_ip" || -z "$orderer_two_ip" || -z "$orderer_three_ip" ]]; then
+        echo "ERROR: Could not resolve all orderer Service IPs for channel endpoint aliases."
+        return 1
+    fi
+
+    patch="{\"spec\":{\"template\":{\"spec\":{\"hostAliases\":[{\"ip\":\"${orderer_one_ip}\",\"hostnames\":[\"orderer.capstone.com\"]},{\"ip\":\"${orderer_two_ip}\",\"hostnames\":[\"orderer2.capstone.com\"]},{\"ip\":\"${orderer_three_ip}\",\"hostnames\":[\"orderer3.capstone.com\"]}]}}}}"
+
+    echo "Configuring Kubernetes resolution for the orderer endpoints embedded in existing channel artifacts..."
+    for entry in \
+        "orderer-1|plv-main-campus" \
+        "orderer-2|plv-main-campus" \
+        "orderer-3|plv-annex-campus"; do
+        IFS='|' read -r deployment namespace <<< "$entry"
+        kubectl patch deployment "$deployment" -n "$namespace" --type=merge -p "$patch" >/dev/null
+        wait_rollout "deployment/${deployment}" "$namespace"
+    done
+}
+
+configure_peer_channel_endpoint_aliases() {
+    local orderer_one_ip
+    local orderer_two_ip
+    local orderer_three_ip
+    local registrar_peer_ip
+    local faculty_peer_ip
+    local department_peer_ip
+    local patch
+    local entry
+    local deployment
+    local namespace
+
+    orderer_one_ip="$(kubectl get service orderer-1 -n plv-main-campus -o jsonpath='{.spec.clusterIP}')"
+    orderer_two_ip="$(kubectl get service orderer-2 -n plv-main-campus -o jsonpath='{.spec.clusterIP}')"
+    orderer_three_ip="$(kubectl get service orderer-3 -n plv-annex-campus -o jsonpath='{.spec.clusterIP}')"
+    registrar_peer_ip="$(kubectl get service peer-registrar -n plv-main-campus -o jsonpath='{.spec.clusterIP}')"
+    faculty_peer_ip="$(kubectl get service peer-faculty -n plv-annex-campus -o jsonpath='{.spec.clusterIP}')"
+    department_peer_ip="$(kubectl get service peer-department -n plv-pubad-campus -o jsonpath='{.spec.clusterIP}')"
+
+    if [[ -z "$orderer_one_ip" || -z "$orderer_two_ip" || -z "$orderer_three_ip" || \
+          -z "$registrar_peer_ip" || -z "$faculty_peer_ip" || -z "$department_peer_ip" ]]; then
+        echo "ERROR: Could not resolve all Fabric Service IPs for peer channel endpoint aliases."
+        return 1
+    fi
+
+    patch="{\"spec\":{\"template\":{\"spec\":{\"hostAliases\":[{\"ip\":\"${orderer_one_ip}\",\"hostnames\":[\"orderer.capstone.com\"]},{\"ip\":\"${orderer_two_ip}\",\"hostnames\":[\"orderer2.capstone.com\"]},{\"ip\":\"${orderer_three_ip}\",\"hostnames\":[\"orderer3.capstone.com\"]},{\"ip\":\"${registrar_peer_ip}\",\"hostnames\":[\"peer0.registrar.capstone.com\"]},{\"ip\":\"${faculty_peer_ip}\",\"hostnames\":[\"peer0.faculty.capstone.com\"]},{\"ip\":\"${department_peer_ip}\",\"hostnames\":[\"peer0.department.capstone.com\"]}]}}}}"
+
+    echo "Configuring Kubernetes resolution for the channel endpoints used by Fabric peers..."
+    for entry in \
+        "peer-registrar|plv-main-campus" \
+        "peer-faculty|plv-annex-campus" \
+        "peer-department|plv-pubad-campus"; do
+        IFS='|' read -r deployment namespace <<< "$entry"
+        kubectl patch deployment "$deployment" -n "$namespace" --type=merge -p "$patch" >/dev/null
+        wait_rollout "deployment/${deployment}" "$namespace"
+    done
+}
+
+    prepare_local_chaincode_images() {
+        if [[ "$PROFILE" != "local" ]]; then
+            return
+        fi
+
+        local fallback_image=""
+        local candidate
+        local index
+        local source_image
+        local target
+        local targets=(
+            registrar-chaincode:latest
+            faculty-chaincode:latest
+            department-chaincode:latest
+        )
+        local candidates=(
+            network-registrar-chaincode:latest
+            network-faculty-chaincode:latest
+            network-department-chaincode:latest
+        )
+
+        for index in "${!targets[@]}"; do
+            target="${targets[$index]}"
+            candidate="${candidates[$index]}"
+
+            if docker image inspect "$target" >/dev/null 2>&1; then
+                if [[ -z "$fallback_image" ]]; then
+                    fallback_image="$target"
+                fi
+                continue
+            fi
+
+            if docker image inspect "$candidate" >/dev/null 2>&1; then
+                source_image="$candidate"
+            elif [[ -n "$fallback_image" ]]; then
+                source_image="$fallback_image"
+            else
+                echo "Building the local chaincode image..."
+                docker build \
+                    -t "$target" \
+                    -f ../chaincode/Dockerfile \
+                    ../chaincode
+                fallback_image="$target"
+                continue
+            fi
+
+            echo "Creating local image tag $target from $source_image"
+            docker image tag "$source_image" "$target"
+            if [[ -z "$fallback_image" ]]; then
+                fallback_image="$target"
+            fi
+        done
+    }
+
+    deploy_manifests() {
     echo "Deploying K8s manifests..."
+    prepare_local_middleware_image
+    prepare_local_chaincode_images
     prepare_manifests
 
     apply_manifest "$TMP_K8S_DIR/00-namespace.yaml"
     apply_manifest "$TMP_K8S_DIR/01a-storage-class.yaml"
     if [[ "$PROFILE" == "local" ]]; then
         apply_manifest "$TMP_K8S_DIR/01b-persistent-volumes.local-kind.yaml"
+        repair_lost_local_pvcs
     fi
     apply_manifest "$TMP_K8S_DIR/02-configmap-secret.yaml"
-    apply_manifest "$TMP_K8S_DIR/04a-postgres-configmap.yaml"
     apply_manifest "$TMP_K8S_DIR/03-Abac.yaml"
     apply_manifest "$TMP_K8S_DIR/04a-postgres-primary.yaml"
+
+    echo "Waiting for PostgreSQL before applying schema migrations..."
+    wait_rollout statefulset/postgres-primary plv-main-campus
+    kubectl delete job postgres-schema-migrations -n plv-main-campus --ignore-not-found --wait=true >/dev/null
+    apply_manifest "$TMP_K8S_DIR/04a-postgres-configmap.yaml"
+    if ! wait_for_job_completion postgres-schema-migrations plv-main-campus 660; then
+        echo "ERROR: PostgreSQL schema migrations failed."
+        show_job_diagnostics postgres-schema-migrations plv-main-campus
+        return 1
+    fi
+    show_job_logs postgres-schema-migrations plv-main-campus
 
     if [[ "$PROFILE" == "production" ]]; then
         apply_manifest "$TMP_K8S_DIR/04b-postgres-replica-annex.yaml"
@@ -398,12 +865,12 @@ deploy_manifests() {
     fi
 
     apply_manifest "$TMP_K8S_DIR/05-fabric-ca.yaml"
-    apply_manifest "$TMP_K8S_DIR/06-orderer-1.yaml"
-    apply_manifest "$TMP_K8S_DIR/06-orderer-2.yaml"
-    apply_manifest "$TMP_K8S_DIR/06-orderer-3.yaml"
+    deploy_orderers_sequentially
+    configure_orderer_channel_endpoint_aliases
     apply_manifest "$TMP_K8S_DIR/07-peer-registrar.yaml"
     apply_manifest "$TMP_K8S_DIR/07-peer-faculty.yaml"
     apply_manifest "$TMP_K8S_DIR/07-peer-department.yaml"
+    configure_peer_channel_endpoint_aliases
     apply_manifest "$TMP_K8S_DIR/08-middleware-api.yaml"
     apply_manifest "$TMP_K8S_DIR/09-ipfs.yaml"
     apply_manifest "$TMP_K8S_DIR/10-ingress-network-policy.yaml"
@@ -423,12 +890,29 @@ deploy_manifests() {
         apply_manifest "$TMP_K8S_DIR/16-firewall-config.yaml"
     else
         kubectl delete horizontalpodautoscaler \
-            middleware-api-hpa client-app-hpa \
+            middleware-api-hpa auth-service-hpa ledger-service-hpa grade-upload-service-hpa client-app-hpa \
             -n plv-fabric --ignore-not-found
         echo "Skipping production-only autoscaling, ingress, backup, quota, and firewall manifests for local profile."
     fi
 
-    kubectl rollout restart deployment/middleware-api deployment/client-app deployment/frontend -n plv-fabric
+    configure_local_application_rollouts
+
+    echo "Restarting Fabric peers sequentially to reload refreshed crypto Secrets..."
+    restart_deployment_and_wait peer-registrar plv-main-campus
+    restart_deployment_and_wait peer-faculty plv-annex-campus
+    restart_deployment_and_wait peer-department plv-pubad-campus
+
+    echo "Restarting application deployments sequentially..."
+    restart_deployment_and_wait auth-service plv-fabric
+    restart_deployment_and_wait fabric-identity-service plv-fabric
+    restart_deployment_and_wait ledger-service plv-fabric
+    restart_deployment_and_wait grade-upload-service plv-fabric
+    restart_deployment_and_wait settings-service plv-fabric
+    restart_deployment_and_wait middleware-api plv-fabric
+    restart_deployment_and_wait client-app plv-fabric
+    restart_deployment_and_wait frontend plv-fabric
+
+    echo "Fabric and application deployments restarted sequentially."
     echo "Manifests deployed."
 }
 
@@ -449,6 +933,11 @@ wait_deployments() {
     wait_rollout deployment/peer-faculty plv-annex-campus
     wait_rollout deployment/peer-department plv-pubad-campus
     wait_rollout statefulset/ipfs-node plv-fabric
+    wait_rollout deployment/auth-service plv-fabric
+    wait_rollout deployment/fabric-identity-service plv-fabric
+    wait_rollout deployment/ledger-service plv-fabric
+    wait_rollout deployment/grade-upload-service plv-fabric
+    wait_rollout deployment/settings-service plv-fabric
     wait_rollout deployment/middleware-api plv-fabric
     wait_rollout deployment/client-app plv-fabric
     wait_rollout deployment/frontend plv-fabric
@@ -502,14 +991,13 @@ spec:
             http://middleware-api.plv-fabric.svc.cluster.local:4000/api/bootstrap
 EOF
 
-    if ! kubectl wait --for=condition=complete "job/${job_name}" -n plv-fabric --timeout=3m >/dev/null; then
+    if ! wait_for_job_completion "$job_name" plv-fabric 180; then
         echo "ERROR: Application account bootstrap failed."
-        kubectl logs "job/${job_name}" -n plv-fabric --all-containers=true || true
-        kubectl describe "job/${job_name}" -n plv-fabric || true
+        show_job_diagnostics "$job_name" plv-fabric
         return 1
     fi
 
-    kubectl logs "job/${job_name}" -n plv-fabric --all-containers=true
+    show_job_logs "$job_name" plv-fabric
     kubectl delete job "$job_name" -n plv-fabric --wait=false >/dev/null
     echo "Application administrator bootstrap completed."
 }
@@ -661,24 +1149,6 @@ force_delete_namespace_workloads() {
     done < <(kubectl get pvc -n "$namespace" -o name 2>/dev/null || true)
 }
 
-force_finalize_namespace() {
-    local namespace="$1"
-
-    if ! kubectl get namespace "$namespace" >/dev/null 2>&1; then
-        return
-    fi
-
-    echo "Removing finalizers from stuck namespace $namespace..."
-    cat <<EOF | kubectl replace --raw "/api/v1/namespaces/${namespace}/finalize" -f - >/dev/null 2>&1 || true
-{
-  "apiVersion": "v1",
-  "kind": "Namespace",
-  "metadata": {"name": "$namespace"},
-  "spec": {"finalizers": []}
-}
-EOF
-}
-
 force_delete_local_resources() {
     echo "Force-deleting the local PLV deployment..."
     stop_local_helpers
@@ -698,10 +1168,16 @@ force_delete_local_resources() {
     done
     kubectl wait --for=delete "${namespace_refs[@]}" --timeout=45s >/dev/null 2>&1 || true
 
+    local cleanup_failed=false
     for namespace in "${NAMESPACES[@]}"; do
-        force_finalize_namespace "$namespace"
+        if kubectl get namespace "$namespace" >/dev/null 2>&1; then
+            echo "ERROR: Namespace $namespace is still terminating. Refusing to force-finalize it because that can orphan PVCs."
+            cleanup_failed=true
+        fi
     done
-    kubectl wait --for=delete "${namespace_refs[@]}" --timeout=30s >/dev/null 2>&1 || true
+    if [[ "$cleanup_failed" == "true" ]]; then
+        return 1
+    fi
 
     echo "Deleting local PersistentVolumes claimed by the PLV deployment..."
     local pv
@@ -711,7 +1187,7 @@ force_delete_local_resources() {
         kubectl delete pv "$pv" --ignore-not-found --wait=false >/dev/null 2>&1 || true
     done
 
-    local cleanup_failed=false
+    cleanup_failed=false
     for namespace in "${NAMESPACES[@]}"; do
         if kubectl get namespace "$namespace" >/dev/null 2>&1; then
             echo "ERROR: Namespace $namespace is still present after forced cleanup."
@@ -762,8 +1238,31 @@ main() {
         apply)
             check_cluster
             inject_configs
-            echo "Converting crypto material to Kubernetes Secrets..."
-            bash ./k8s/create-crypto-secrets.sh
+
+            echo "======================================"
+            echo "Creating Fabric Crypto Secrets"
+            echo "======================================"
+
+            local_crypto_script="./k8s/create-crypto-secrets.sh"
+
+            if [[ ! -f "$local_crypto_script" ]]; then
+                echo "ERROR: Missing:"
+                echo "  $local_crypto_script"
+                exit 1
+            fi
+
+            # Handle scripts edited from Windows.
+            sed -i 's/\r$//' "$local_crypto_script"
+            chmod +x "$local_crypto_script"
+
+            if ! bash "$local_crypto_script"; then
+                echo "ERROR: Fabric crypto secret generation failed."
+                echo "Kubernetes deployment has been stopped."
+                exit 1
+            fi
+
+            echo "Crypto Secrets generated successfully."
+
             deploy_manifests
             wait_deployments
             bootstrap_application_accounts

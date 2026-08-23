@@ -78,8 +78,12 @@ spec:
           mountPath: /docker-entrypoint-initdb.d
       volumes:
       - name: postgres-init-script
-        configMap:
-          name: postgres-init-script
+        projected:
+          sources:
+          - configMap:
+              name: postgres-init-script
+          - configMap:
+              name: postgres-runtime-migrations
   volumeClaimTemplates:
   - metadata:
       name: postgres-storage

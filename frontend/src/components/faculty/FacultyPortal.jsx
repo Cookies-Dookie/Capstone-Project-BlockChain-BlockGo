@@ -4,6 +4,7 @@ import Modal from '../../services/Modal';
 import FacultyHeader from './FacultyHeader';
 import YearTabs from './YearTabs';
 import ProgramCard from './ProgramCard';
+import FacultyCurriculumPanel from './FacultyCurriculumPanel';
 
 const normalizeYearLabel = (value) => {
   const raw = String(value || '').trim();
@@ -223,6 +224,7 @@ const getTemporarySheetHeader = () => [
 ];
 
 const FacultyPortal = ({ facultyData, onLogout }) => {
+  const [portalView, setPortalView] = useState('grades');
   const [activeSection, setActiveSection] = useState(null);
   const [activeTab, setActiveTab] = useState("All Sections");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1142,6 +1144,10 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
               course: sectionData.sectionCourse || sectionData.subjectCode || sectionName,
               subject_code: sectionData.subjectCode,
               subject_name: sectionData.subjectTitle || sectionData.subjectCode,
+              professor_name: facultyData.name || facultyData.email,
+              program: sectionData.sectionCourse || '',
+              term: encodingTerm,
+              units: Number(sectionData.units) || 3,
               year_level: sectionData.year || "",
               grade: JSON.stringify({
                 midterm: student.midterm,
@@ -1219,6 +1225,28 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
   const isMidtermLocked = encodingTerm !== 'midterm';
   const isFinalsLocked = encodingTerm !== 'finals';
 
+  if (portalView === 'curriculum') {
+    return (
+      <div className="min-h-screen bg-slate-50 pb-10 font-sans">
+        <FacultyHeader
+          facultyData={{ ...facultyData, semester: encodingSemester }}
+          totalSections={totalSections}
+          onLogout={onLogout}
+        />
+        <main className="w-full px-4 py-5 md:px-6">
+          <button
+            type="button"
+            onClick={() => setPortalView('grades')}
+            className="mb-5 rounded-lg bg-[#003366] px-4 py-2 text-sm font-bold text-white"
+          >
+            Back to Grade Encoding
+          </button>
+          <FacultyCurriculumPanel />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 pb-10 font-sans">
       <FacultyHeader
@@ -1228,6 +1256,15 @@ const FacultyPortal = ({ facultyData, onLogout }) => {
       />
 
       <div className="w-full px-4 md:px-6">
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setPortalView('curriculum')}
+            className="rounded-lg border border-[#003366] bg-white px-4 py-2 text-sm font-bold text-[#003366] hover:bg-blue-50"
+          >
+            View Program Curriculum
+          </button>
+        </div>
         {bannerState === 'not_set' && (
           <div className="mt-5 flex items-center gap-4 rounded-xl border-l-4 border-slate-400 bg-white p-4 text-slate-800 shadow-sm">
             <div>

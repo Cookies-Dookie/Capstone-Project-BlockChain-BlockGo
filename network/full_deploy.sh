@@ -35,7 +35,7 @@ cleanup_processes() {
     fi
     pkill -9 -f nginx_failover_watchdog.sh 2>/dev/null || true
     docker compose -f docker-compose-main.yaml -f docker-compose-annex.yaml -f docker-compose-pubad.yaml down -v --remove-orphans 2>/dev/null || true
-    docker rm -f -v couchdb_wallet couchdb_wallet_faculty couchdb_wallet_department blockgo-middleware nginx-shield-main-failover nginx-shield-annex-failover nginx-shield-pubad-failover 2>/dev/null || true
+    docker rm -f -v couchdb_wallet couchdb_wallet_faculty couchdb_wallet_department blockgo-middleware blockgo-api-gateway blockgo-auth-service blockgo-fabric-identity-service blockgo-ledger-service blockgo-grade-upload-service blockgo-settings-service nginx-shield-main-failover nginx-shield-annex-failover nginx-shield-pubad-failover 2>/dev/null || true
     log_info "All processes stopped and volumes wiped."
 }
 
@@ -144,7 +144,7 @@ fi
     pkill -9 -f nginx_failover_watchdog.sh 2>/dev/null || true
 
 docker compose -f docker-compose-main.yaml -f docker-compose-annex.yaml -f docker-compose-pubad.yaml down -v --remove-orphans 2>/dev/null || true
-docker rm -f -v couchdb_wallet couchdb_wallet_faculty couchdb_wallet_department blockgo-middleware nginx-shield-main-failover nginx-shield-annex-failover nginx-shield-pubad-failover 2>/dev/null || true
+docker rm -f -v couchdb_wallet couchdb_wallet_faculty couchdb_wallet_department blockgo-middleware blockgo-api-gateway blockgo-auth-service blockgo-fabric-identity-service blockgo-ledger-service blockgo-grade-upload-service blockgo-settings-service nginx-shield-main-failover nginx-shield-annex-failover nginx-shield-pubad-failover 2>/dev/null || true
 
 # Force remove root-owned files created by containers to prevent CA container crashes
 docker run --rm -v "$(pwd):/tmp/network" alpine sh -c "find /tmp/network/fabric-ca -type f ! -name '*.yaml' -delete && rm -rf /tmp/network/${CRYPTO_DIR} /tmp/network/${ARTIFACTS_DIR} /tmp/network/../middleware/wallet" 2>/dev/null || true

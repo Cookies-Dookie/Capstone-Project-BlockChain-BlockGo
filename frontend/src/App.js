@@ -19,7 +19,7 @@ const normalizeAppRole = (role) => {
   if (normalized === 'system_admin' || normalized === 'systemadmin' || normalized === 'system_administrator' || normalized === 'systemadministrator') {
     return 'system_admin';
   }
-  if (normalized === 'dept_admin' || normalized === 'deptadmin' || normalized === 'departmentadmin' || normalized === 'department' || normalized === 'admin' || normalized === 'departmentmsp') {
+  if (normalized === 'dept_admin' || normalized === 'deptadmin' || normalized === 'department_admin' || normalized === 'departmentadmin' || normalized === 'department' || normalized === 'chairperson' || normalized === 'department_head' || normalized === 'admin' || normalized === 'departmentmsp') {
     return 'department_admin';
   }
   if (normalized === 'facultymsp') return 'faculty';
@@ -98,6 +98,12 @@ function AppContent() {
           department: fetchedUser.department,
           section: fetchedUser.section,
           yearLevel: fetchedUser.yearLevel,
+          curriculumId: fetchedUser.curriculumId,
+          curriculumName: fetchedUser.curriculumName,
+          curriculumVersion: fetchedUser.curriculumVersion,
+          schoolYear: fetchedUser.schoolYear,
+          semester: fetchedUser.semester,
+          enrollmentStatus: fetchedUser.enrollmentStatus,
           enrolledSubjects: fetchedUser.enrolledSubjects,
           facultyType: fetchedUser.facultyType,
           Classification: fetchedUser.facultyType || fetchedUser.classification,
@@ -175,7 +181,7 @@ function AppContent() {
   }, [addNotification, user?.role]);
 
   const currentUserRole = normalizeAppRole(user?.role);
-  const canUseChat = currentUserRole !== 'system_admin';
+  const canUseChat = ['student', 'faculty', 'department_admin', 'registrar', 'system_admin'].includes(currentUserRole);
 
   return (
     <div className="main-app-wrapper">
@@ -244,7 +250,12 @@ function AppContent() {
               />
             </div>
           ) : currentUserRole === "system_admin" ? (
-            <SystemAdminPortal adminData={user} onLogout={handleLogout} />
+            <SystemAdminPortal
+              adminData={user}
+              onLogout={handleLogout}
+              chatUnreadCount={chatUnreadTotal}
+              onOpenChat={() => setIsChatOpen(true)}
+            />
           ) : (
             <div style={{ position: 'relative', width: '100%', minHeight: '100vh', backgroundColor: '#f0f2f5' }}>
               <div style={{ position: 'absolute', top: '15px', right: '20px', zIndex: 10 }}>

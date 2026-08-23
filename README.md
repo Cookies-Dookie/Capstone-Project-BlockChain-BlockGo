@@ -192,10 +192,11 @@ Capstone-Project/
 │   ├── src/
 │   │   ├── api.js           # API Wrapper (Handles routing & JWTs)
 │   │   └── GradesDashboard.jsx # Main Dashboard UI
-├── middleware/              # Node.js Backend (Vault/Fabric Bridge)
-│   ├── enrollAdmin.js       # Admin enrollment & CouchDB Wallet seeder
-│   ├── middleware.js        # Express API (Fabric SDK, Bcrypt, JWT)
-│   └── nginx/               # Nginx Reverse Proxy Configurations
+├── middleware/              # Node.js microservices and stable API gateway
+│   ├── middleware.js        # Compatibility launcher for the API gateway
+│   ├── src/services/        # Auth, identity, ledger, upload, and settings processes
+│   ├── src/fabric/          # Shared CA, wallet, and Gateway adapters
+│   └── nginx/               # Nginx reverse-proxy configuration
 ├── Guide.md                 # System Architecture, DFDs, and Sequence Diagrams
 └── network/                 # Docker Compose & Fabric Configs
     ├── crypto-config/       # Auto-generated X.509 certificates

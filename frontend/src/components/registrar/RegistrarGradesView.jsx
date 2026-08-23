@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, openDecryptedIpfsFile, getSystemSetting, registrarBulkEnrollStudents, registrarBulkUpdateStudents, resetEncodingSeason } from '../../services/api';
+import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, openDecryptedIpfsFile, getSystemSetting, resetEncodingSeason } from '../../services/api';
 import RegistrarHeader from './RegistrarHeader';
 import RegistrarSidebar from './RegistrarSidebar';
 import RegistrarDashboard from './RegistrarDashboard';
@@ -10,9 +10,12 @@ import PdfReportViewer from '../shared/PdfReportViewer';
 import Modal from '../../services/Modal';
 import RegistrarStudentSectioning from './RegistrarStudentSectioning';
 import RegistrarSectionsCreated from './RegistrarSectionsCreated';
-import { downloadTemplateButtonClass } from '../shared/downloadButtonStyles';
-import { buildCsvContent, downloadCsvFile } from '../../utils/studentSectioningHelpers';
 import { isDepartmentApprovedGradeStatus } from '../../utils/gradeStatus';
+import StaffAccountCreation from './StaffAccountCreation';
+import CurriculumManagement from './CurriculumManagement';
+import { programs } from '../../data/registrarData';
+import RegistrarSupportTickets from './RegistrarSupportTickets';
+import StudentEnrollmentManagement from './StudentEnrollmentManagement';
 
 const RegistrarGradesView = ({
     loggedInEmail = '',
@@ -21,12 +24,15 @@ const RegistrarGradesView = ({
     latestChatNotice = null,
     onOpenChat,
 }) => {
-    const managementTabs = ['grades', 'Requests', 'assigning', 'bulkEnroll', 'revokeAccounts'];
+    const managementTabs = ['grades', 'Requests', 'assigning', 'bulkEnroll', 'createAccounts', 'curriculum', 'tickets', 'revokeAccounts'];
     const managementMenuItems = [
         { id: 'grades', label: 'Grades Ledger' },
         { id: 'Requests', label: 'Pending Requests' },
         { id: 'assigning', label: 'Assigning' },
-        { id: 'bulkEnroll', label: 'Register Students' },
+        { id: 'bulkEnroll', label: 'Student Enrollment' },
+        { id: 'createAccounts', label: 'Create Staff Accounts' },
+        { id: 'curriculum', label: 'Curriculum Management' },
+        { id: 'tickets', label: 'Report System Error' },
         { id: 'revokeAccounts', label: 'Account Revocation' },
     ];
     const [grades, setGrades] = useState([]);
@@ -46,32 +52,12 @@ const RegistrarGradesView = ({
     const [stagedGrades, setStagedGrades] = useState([]);
     const [stagedLoading, setStagedLoading] = useState(false);
     const [activeSemester, setActiveSemester] = useState('2nd Semester');
-    const [bulkEnrollLoading, setBulkEnrollLoading] = useState(false);
-    const [bulkEnrollResult, setBulkEnrollResult] = useState(null);
 
     const [filterDept, setFilterDept] = useState('All');
     const [filterYear, setFilterYear] = useState('All');
     const [filterSection, setFilterSection] = useState('All');
 
-    const departments = [
-    "Bachelor of Early Childhood Education",
-    "Bachelor of Secondary Education Major in English",
-    "Bachelor of Secondary Education Major in Filipino",
-    "Bachelor of Secondary Education Major in Mathematics",
-    "Bachelor of Secondary Education Major in Science",
-    "Bachelor of Secondary Education Major in Social Studies",
-    "Bachelor of Science in Civil Engineering",
-    "Bachelor of Science in Electrical Engineering",
-    "Bachelor of Science in Information Technology",
-    "Bachelor of Arts in Communication",
-    "Bachelor of Science in Psychology",
-    "Bachelor of Science in Social Work",
-    "Bachelor of Public Administration",
-    "Bachelor of Science in Accountancy",
-    "Bachelor of Science in Business Administration Major in Financial Management",
-    "Bachelor of Science in Business Administration Major in Human Resource Management",
-    "Bachelor of Science in Business Administration Major in Marketing Management",
-    ];
+    const departments = programs;
     const [sectioningDepartment, setSectioningDepartment] = useState(departments[0]);
 
     const [ipfsModalOpen, setIpfsModalOpen] = useState(false);
@@ -857,54 +843,6 @@ const RegistrarGradesView = ({
         }
     };
 
-    const handleDownloadBulkEnrollmentTemplate = () => {
-        const rows = [
-            ['student_id', 'first_name', 'last_name', 'middle_name', 'sex', 'email', 'number', 'address', 'birthday'],
-            ['26-0001', 'Juan', 'Dela Cruz', 'Andres', 'Male', '26-0001@plv.edu.ph', '09123456789', 'Valenzuela City', '05/15/2005'],
-            ['26-0002', 'Maria', 'Santos', 'Lopez', 'Female', '26-0002@plv.edu.ph', '09987654321', 'Valenzuela City', '08/20/2005'],
-        ];
-
-        downloadCsvFile(
-            buildCsvContent(rows),
-            'bulk-enroll-template.csv'
-        );
-    };
-
-    const handleStudentCsvAction = (mode) => {
-        if (bulkEnrollLoading) return;
-
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
-
-        input.onchange = async (event) => {
-            const file = event.target.files?.[0];
-            if (!file) return;
-
-            setBulkEnrollLoading(true);
-            setBulkEnrollResult(null);
-
-            try {
-                const result = mode === 'update'
-                    ? await registrarBulkUpdateStudents(file, sectioningDepartment)
-                    : await registrarBulkEnrollStudents(file, sectioningDepartment);
-                setBulkEnrollResult(result);
-                alert(result.message || 'Bulk enrollment completed.');
-            } catch (error) {
-                const message = error.message || 'Bulk enrollment failed.';
-                setBulkEnrollResult({ status: 'Error', message, failed: 1, successful: 0 });
-                alert(message);
-            } finally {
-                setBulkEnrollLoading(false);
-            }
-        };
-
-        input.click();
-    };
-
-    const handleBulkEnroll = () => handleStudentCsvAction('enroll');
-    const handleBulkUpdateInfo = () => handleStudentCsvAction('update');
-
     const isManagementView = managementTabs.includes(mainTab);
 
     return (
@@ -973,65 +911,11 @@ const RegistrarGradesView = ({
                         </div>
                     )}
                     {mainTab === 'bulkEnroll' && (
-                        <div className="space-y-4">
-                            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                                <div className="flex flex-col gap-4">
-                                    <div className="max-w-2xl">
-                                        <h3 className="text-xl font-bold text-[#003366]">Register Students</h3>
-                                        <p className="mt-1 text-sm text-slate-500">
-                                            Required columns: student ID, first name, last name, middle name, sex, email, number, address, and birthday. Student ID must use `xx-xxxx`, and birthday must use `MM/DD/YYYY`.
-                                        </p>
-                                    </div>
-                                </div>
-                                {bulkEnrollResult ? (
-                                    <div className={`mt-4 rounded-xl border p-4 text-sm ${bulkEnrollResult.status === 'Error' || bulkEnrollResult.failed > 0 ? 'border-yellow-300 bg-yellow-50 text-yellow-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
-                                        <p className="font-semibold">{bulkEnrollResult.status}</p>
-                                        <p>{bulkEnrollResult.message}</p>
-                                        {typeof bulkEnrollResult.successful !== 'undefined' ? (
-                                            <p className="mt-1">Successful: {bulkEnrollResult.successful} | Failed: {bulkEnrollResult.failed || 0}</p>
-                                        ) : null}
-                                        {Array.isArray(bulkEnrollResult.errors) && bulkEnrollResult.errors.length > 0 ? (
-                                            <div className="mt-3 rounded-lg border border-yellow-200 bg-white/70 p-3">
-                                                <p className="font-semibold text-slate-800">Row Issues</p>
-                                                <ul className="mt-2 space-y-1 text-slate-700">
-                                                    {bulkEnrollResult.errors.slice(0, 10).map((errorItem, index) => (
-                                                        <li key={`${errorItem.row || 'row'}-${index}`}>
-                                                            Row {errorItem.row || '?'} ({errorItem.identifier || 'Unknown'}): {errorItem.reason}
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                ) : null}
-                                <div className="mt-5 flex flex-wrap gap-3 border-t border-slate-200 pt-4">
-                                    <button
-                                        type="button"
-                                        onClick={handleDownloadBulkEnrollmentTemplate}
-                                        className={downloadTemplateButtonClass}
-                                    >
-                                        Download Template
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleBulkEnroll}
-                                        disabled={bulkEnrollLoading}
-                                        className="inline-flex items-center justify-center rounded-xl bg-[#003366] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#00264d]"
-                                    >
-                                        {bulkEnrollLoading ? 'Uploading...' : 'Upload Students'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleBulkUpdateInfo}
-                                        disabled={bulkEnrollLoading}
-                                        className="inline-flex items-center justify-center rounded-xl border border-[#003366] bg-white px-5 py-3 text-sm font-semibold text-[#003366] transition hover:bg-slate-50"
-                                    >
-                                        {bulkEnrollLoading ? 'Uploading...' : 'Update Student Info'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
+                        <StudentEnrollmentManagement programs={departments} />
                     )}
+                    {mainTab === 'createAccounts' && <StaffAccountCreation />}
+                    {mainTab === 'curriculum' && <CurriculumManagement />}
+                    {mainTab === 'tickets' && <RegistrarSupportTickets />}
                     {mainTab === 'sectionsCreated' && <RegistrarSectionsCreated />}
                     {mainTab === 'reports' && (
                         <div className="flex flex-col gap-8">

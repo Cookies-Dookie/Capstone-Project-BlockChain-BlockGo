@@ -3,23 +3,30 @@ FROM node:20-slim
 # Install system dependencies for node-canvas, bcrypt, etc. if needed
 RUN apt-get update && apt-get install -y \
     python3 \
+    python3-pip \
+    python3-venv \
     make \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+RUN python3 -m venv /opt/blockgo-venv
+ENV PATH="/opt/blockgo-venv/bin:$PATH"
+
 # Copy package files
 COPY package*.json ./
+COPY requirements.txt ./
 
 # Install production dependencies exactly from the lockfile
 RUN npm ci --omit=dev
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
 COPY . .
 
-# Expose the middleware port
-EXPOSE 4000
+# The same immutable image supplies six independently deployed process types.
+EXPOSE 4000 4001 4002 4003 4004 4005
 
 # Set environment defaults
 ENV PORT=4000

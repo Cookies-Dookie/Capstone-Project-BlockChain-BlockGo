@@ -26,8 +26,8 @@ chmod +x ./full_deploy.sh
 # Monitor deployment status
 ./k8s/deploy-k8s.sh local status
 
-# View logs
-kubectl logs deployment/plv-middleware -n plv-fabric -f
+# View edge-gateway logs
+kubectl logs deployment/middleware-api -n plv-fabric -f
 ```
 
 The local profile does not create application HPAs because Docker Desktop does
@@ -57,7 +57,9 @@ routes browser requests to the middleware, C# backend, SignalR hub, and IPFS
 services inside Kubernetes. The deployment script owns the background
 port-forward and `./k8s/deploy-k8s.sh local delete` stops it forcefully.
 
-Direct middleware access is optional for debugging:
+The public compatibility API remains on `middleware-api:4000`. It routes to
+independently deployed auth, Fabric identity, ledger, upload, and settings
+services. Direct gateway access is optional for debugging:
 
 ```bash
 # Port-forward middleware API
@@ -65,7 +67,11 @@ kubectl port-forward -n plv-fabric svc/middleware-api 4000:4000
 
 # Test health endpoint
 curl http://localhost:4000/api/health
+curl http://localhost:4000/api/ready
 ```
+
+The readiness response reports each internal service independently. Internal
+Services are ClusterIP-only and are not exposed through Ingress.
 
 ### System Administrator Portal
 
@@ -104,6 +110,11 @@ To rerun the idempotent bootstrap manually:
 ./k8s/join-peers.sh
 ./k8s/install-chaincode.sh
 ```
+
+The local scripts default `KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false` so Fabric
+bootstrap remains compatible with Docker Desktop 4.80 / Kubernetes 1.36. Set
+the variable explicitly to override that transport choice. Docker Desktop
+4.83 and later contain the upstream `kubectl exec`/`attach` fix.
 
 Set `FABRIC_BOOTSTRAP=false` when running `deploy-k8s.sh` only when manifests
 must be applied without changing Fabric channel or chaincode state.
@@ -234,8 +245,8 @@ kubectl delete namespace plv-fabric plv-main-campus plv-annex-campus plv-pubad-c
    - Deploy Prometheus + Grafana; the repository currently provides configuration and alert rules, not those workloads
    - Mount `../monitoring/prometheus.yaml` and `../monitoring/alert-rules.yaml`, then set `PROMETHEUS_URL` to the in-cluster Prometheus service
    - Import `../monitoring/grafana-dashboard.json`
-   - Scrape middleware metrics from `middleware-api:4000/metrics`
-   - Use kube-state-metrics and cAdvisor panels for frontend, client-app, and middleware deployment health
+   - Scrape gateway metrics from `middleware-api:4000/metrics` and discover the five internal middleware Services through pod annotations
+   - Use kube-state-metrics and cAdvisor panels for frontend, client-app, gateway, auth, identity, ledger, upload, and settings deployment health
    - Use `/nginx-health`, `/api/backend/health`, `/api/health`, and `/api/ready` for runtime health checks
    - Enable audit logging
    - Set up alerts for frontend/client-app availability, pod restarts, and memory pressure
@@ -246,7 +257,7 @@ kubectl delete namespace plv-fabric plv-main-campus plv-annex-campus plv-pubad-c
    - Encrypt secrets at rest (etcd encryption)
 
 5. **Scaling**
-   - HPA configured for middleware-api
+   - HPAs configured independently for the API gateway, auth, ledger, and upload workloads
    - Consider KPA (Knative) for auto-scaling
    - Monitor resource usage
 

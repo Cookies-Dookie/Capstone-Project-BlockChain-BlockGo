@@ -5,6 +5,7 @@ function ChairpersonSidebar({ activeTab, setActiveTab }) {
     { id: "dashboard", label: "Encoding Monitoring" },
     { id: "sectioning", label: "Department Sections" },
     { id: "assignment", label: "Academic Assignment" },
+    { id: "curriculum", label: "Curriculum Builder" },
     { id: "forReview", label: "For Review" },
   ];
 

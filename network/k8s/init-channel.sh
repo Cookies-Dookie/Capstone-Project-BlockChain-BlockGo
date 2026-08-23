@@ -13,6 +13,10 @@ CLI_LABEL="app=fabric-cli"
 CHANNEL_BLOCK="/opt/fabric-config/network/channel-artifacts/registrar-channel.block"
 ORDERER_TLS_DIR="/var/hyperledger/orderer/tls"
 
+if [[ "$PROFILE" == "local" ]]; then
+    export KUBECTL_REMOTE_COMMAND_WEBSOCKETS="${KUBECTL_REMOTE_COMMAND_WEBSOCKETS:-false}"
+fi
+
 if [[ "$PROFILE" == "production" ]]; then
     # For production, use the secure admin port (default 9443) with HTTPS.
     # This requires ORDERER_ADMIN_TLS_ENABLED=true in the orderer's environment.
@@ -54,12 +58,11 @@ osnadmin_exec() {
         # For production, provide client TLS certificates for mutual TLS with the orderer admin endpoint.
         kubectl exec -n "$CLI_NAMESPACE" "$CLI_POD" -c cli -- \
             osnadmin "$@" \
-            --tls \
             --client-cert "$ORDERER_TLS_DIR/server.crt" \
             --client-key "$ORDERER_TLS_DIR/server.key" \
             --ca-file "$ORDERER_TLS_DIR/ca.crt"
     else # Local profile
-        kubectl exec -n "$CLI_NAMESPACE" "$CLI_POD" -c cli -- osnadmin "$@" --no-tls
+        kubectl exec -n "$CLI_NAMESPACE" "$CLI_POD" -c cli -- osnadmin "$@"
     fi
 }
 

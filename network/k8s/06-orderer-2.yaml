@@ -19,6 +19,11 @@ metadata:
   namespace: plv-main-campus
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: orderer-2
@@ -69,14 +74,6 @@ spec:
           value: /var/hyperledger/orderer/tls/server.key
         - name: ORDERER_GENERAL_CLUSTER_ROOTCAS
           value: "[/var/hyperledger/orderer/tls/ca.crt]"
-        - name: ORDERER_GENERAL_CLUSTER_LISTENADDRESS
-          value: "0.0.0.0"
-        - name: ORDERER_GENERAL_CLUSTER_LISTENPORT
-          value: "7051"
-        - name: ORDERER_GENERAL_CLUSTER_SERVERCERTIFICATE
-          value: /var/hyperledger/orderer/tls/server.crt
-        - name: ORDERER_GENERAL_CLUSTER_SERVERPRIVATEKEY
-          value: /var/hyperledger/orderer/tls/server.key
         - name: ORDERER_CHANNELPARTICIPATION_ENABLED
           value: "true"
         - name: ORDERER_ADMIN_LISTENADDRESS

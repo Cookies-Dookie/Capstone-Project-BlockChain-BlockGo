@@ -6,6 +6,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+PROFILE="${K8S_PROFILE:-local}"
 CHANNEL_NAME="${CHANNEL_NAME:-registrar-channel}"
 CC_NAME="${CHAINCODE_NAME:-registrar}"
 CC_LABEL="${CHAINCODE_LABEL:-registrar_1.0}"
@@ -15,6 +16,11 @@ CLI_NAMESPACE="plv-main-campus"
 REMOTE_DIR="/tmp/blockgo-chaincode-bootstrap"
 ORDERER_ENDPOINT="orderer-1.plv-main-campus.svc.cluster.local:7050"
 ORDERER_TLS_OVERRIDE="orderer.capstone.com"
+CHAINCODE_PACKAGE_ANNOTATION="blockgo.plv/chaincode-package-id"
+
+if [[ "$PROFILE" == "local" ]]; then
+    export KUBECTL_REMOTE_COMMAND_WEBSOCKETS="${KUBECTL_REMOTE_COMMAND_WEBSOCKETS:-false}"
+fi
 
 ORGS=(registrar faculty department)
 NAMESPACES=(plv-fabric plv-main-campus plv-annex-campus plv-pubad-campus)
@@ -65,7 +71,10 @@ require_file() {
 require_file "./crypto-config-final-v2/chaincode-tls/ca-bundle/ca-bundle.pem"
 require_file "./crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/ca.crt"
 
-ROOT_CERT="$(base64 < ./crypto-config-final-v2/chaincode-tls/ca-bundle/ca-bundle.pem | tr -d '\r\n')"
+# Fabric expects root_cert to contain PEM text. Escape its line endings for JSON;
+# base64-encoding the entire PEM makes the peer fail with "error adding root certificate".
+ROOT_CERT="$(awk '{ sub(/\r$/, ""); printf "%s\\n", $0 }' \
+    ./crypto-config-final-v2/chaincode-tls/ca-bundle/ca-bundle.pem)"
 
 create_package() {
     local org="$1"
@@ -126,12 +135,13 @@ wait_for_cli() {
 
 peer_exec() {
     local org="$1"
+    local tls_host_override="${PEER_TLS_HOST_OVERRIDE-${ORG_PEER_HOST[$org]}}"
     shift
 
     MSYS_NO_PATHCONV=1 kubectl exec -n "$CLI_NAMESPACE" "$CLI_POD" -c cli -- env \
         CORE_PEER_TLS_ENABLED=true \
         CORE_PEER_TLS_ROOTCERT_FILE="$REMOTE_DIR/$org/peer-tls-ca.crt" \
-        CORE_PEER_TLS_SERVERHOSTOVERRIDE="${ORG_PEER_HOST[$org]}" \
+        CORE_PEER_TLS_SERVERHOSTOVERRIDE="$tls_host_override" \
         CORE_PEER_LOCALMSPID="${ORG_MSP[$org]}" \
         CORE_PEER_MSPCONFIGPATH="$REMOTE_DIR/$org/admin-msp" \
         CORE_PEER_ADDRESS="${ORG_PEER_HOST[$org]}:7051" \
@@ -203,9 +213,33 @@ sync_chaincode_ids() {
         kubectl patch secret blockgo-secrets -n "$namespace" --type=merge -p "$payload" >/dev/null
     done
 
+    if [[ "$PROFILE" == "local" ]]; then
+        for org in "${ORGS[@]}"; do
+            kubectl patch "deployment/${ORG_CHAINCODE_DEPLOYMENT[$org]}" \
+                -n "${ORG_NAMESPACE[$org]}" --type=merge \
+                -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+        done
+    fi
+
     for org in "${ORGS[@]}"; do
+        local deployed_package_id
+        deployed_package_id="$(
+            kubectl get "deployment/${ORG_CHAINCODE_DEPLOYMENT[$org]}" \
+                -n "${ORG_NAMESPACE[$org]}" \
+                -o "jsonpath={.metadata.annotations['blockgo\\.plv/chaincode-package-id']}" \
+                2>/dev/null || true
+        )"
+
+        if [[ "$deployed_package_id" == "${PACKAGE_IDS[$org]}" ]]; then
+            echo "[SKIP] ${ORG_CHAINCODE_DEPLOYMENT[$org]} already runs ${PACKAGE_IDS[$org]}."
+            continue
+        fi
+
         kubectl rollout restart "deployment/${ORG_CHAINCODE_DEPLOYMENT[$org]}" -n "${ORG_NAMESPACE[$org]}" >/dev/null
         kubectl rollout status "deployment/${ORG_CHAINCODE_DEPLOYMENT[$org]}" -n "${ORG_NAMESPACE[$org]}" --timeout=5m
+        kubectl annotate "deployment/${ORG_CHAINCODE_DEPLOYMENT[$org]}" \
+            -n "${ORG_NAMESPACE[$org]}" \
+            "${CHAINCODE_PACKAGE_ANNOTATION}=${PACKAGE_IDS[$org]}" --overwrite >/dev/null
     done
 }
 
@@ -264,7 +298,7 @@ commit_chaincode() {
     done
 
     echo "[COMMIT] Committing $CC_NAME sequence $CC_SEQUENCE..."
-    peer_exec registrar peer lifecycle chaincode commit \
+    PEER_TLS_HOST_OVERRIDE="" peer_exec registrar peer lifecycle chaincode commit \
         --orderer "$ORDERER_ENDPOINT" \
         --ordererTLSHostnameOverride "$ORDERER_TLS_OVERRIDE" \
         --tls --cafile "$REMOTE_DIR/orderer-tls-ca.crt" \
@@ -290,7 +324,7 @@ initialize_ledger() {
     fi
 
     echo "[INIT] Creating the ledger genesis record..."
-    peer_exec registrar peer chaincode invoke \
+    PEER_TLS_HOST_OVERRIDE="" peer_exec registrar peer chaincode invoke \
         --orderer "$ORDERER_ENDPOINT" \
         --ordererTLSHostnameOverride "$ORDERER_TLS_OVERRIDE" \
         --tls --cafile "$REMOTE_DIR/orderer-tls-ca.crt" \

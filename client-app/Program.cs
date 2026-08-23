@@ -9,7 +9,9 @@ using Client_app.Controllers;
 using For_Testing_Only_Capstone.Models;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using System.Security.Cryptography;
 using System.Text;
+using Npgsql;
 
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
@@ -141,8 +143,8 @@ try
     builder.Services.AddProblemDetails();
 
     var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET") ?? throw new InvalidOperationException("JWT_SECRET environment variable is required.");
-    jwtSecret = jwtSecret.Trim().PadRight(32, '0').Substring(0, 32);
-    var jwtKey = Encoding.UTF8.GetBytes(jwtSecret);
+    // Keep token validation byte-for-byte compatible with the Node login service.
+    var jwtKey = SHA256.HashData(Encoding.UTF8.GetBytes(jwtSecret.Trim()));
 
     builder.Services.AddAuthorization();
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -161,6 +163,60 @@ try
         };
         options.Events = new JwtBearerEvents
         {
+            OnTokenValidated = async context =>
+            {
+                var email = context.Principal?.Identity?.Name
+                    ?? context.Principal?.Claims.FirstOrDefault(claim => claim.Type == "email")?.Value;
+                var tokenRole = context.Principal?.Claims.FirstOrDefault(claim => claim.Type == "dbRole")?.Value;
+                if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(tokenRole))
+                {
+                    context.Fail("The access token is missing its account identity.");
+                    return;
+                }
+
+                var validationConnection = builder.Configuration.GetConnectionString("MasterConnection")
+                    ?? builder.Configuration.GetConnectionString("PostgresConnection");
+                if (string.IsNullOrWhiteSpace(validationConnection))
+                {
+                    context.Fail("Account validation is unavailable.");
+                    return;
+                }
+
+                try
+                {
+                    await using var connection = new NpgsqlConnection(validationConnection);
+                    await connection.OpenAsync(context.HttpContext.RequestAborted);
+                    await using var command = new NpgsqlCommand(@"
+                        SELECT role
+                        FROM users
+                        WHERE LOWER(email) = LOWER(@email)
+                          AND is_active = TRUE
+                          AND LOWER(status) = 'approved'
+                        LIMIT 1;", connection);
+                    command.Parameters.AddWithValue("email", email);
+                    var databaseRole = (await command.ExecuteScalarAsync(context.HttpContext.RequestAborted))?.ToString();
+                    static string NormalizeRole(string value)
+                    {
+                        var normalized = value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+                        return normalized switch
+                        {
+                            "systemadmin" or "sysadmin" or "system_administrator" => "system_admin",
+                            "deptadmin" or "dept_admin" or "department" or "departmentadmin" or "chairperson" or "department_head" or "admin" => "department_admin",
+                            "instructor" => "faculty",
+                            var role => role
+                        };
+                    }
+                    if (string.IsNullOrWhiteSpace(databaseRole) || NormalizeRole(databaseRole) != NormalizeRole(tokenRole))
+                    {
+                        context.Fail("This account is inactive, changed, or no longer authorized.");
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Log.Warning(exception, "Could not validate active access for {Email}.", email);
+                    context.Fail("Account validation failed.");
+                }
+            },
             OnMessageReceived = context =>
             {
                 var accessToken = context.Request.Query["access_token"];
@@ -204,6 +260,8 @@ try
     builder.Services.AddHttpClient<IBlockchainService, BlockchainService>();
     builder.Services.AddScoped<IFabricCaAuthService, FabricCaAuthService>();
     builder.Services.AddScoped<IEmailService, EmailService>();
+    builder.Services.AddScoped<IAuditLogService, AuditLogService>();
+    builder.Services.AddScoped<IAccountProvisioningService, AccountProvisioningService>();
     builder.Services.AddSingleton<IChatMessageEncryption, ChatMessageEncryption>();
 
     builder.Services.AddHttpClient("FabricCAClient")

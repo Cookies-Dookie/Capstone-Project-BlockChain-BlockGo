@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchSystemMonitoringSummary } from '../../services/api';
+import { fetchSystemMonitoringSummary, resolveSecurityEvent } from '../../services/api';
 
 const REFRESH_INTERVAL_MS = 30000;
 
@@ -112,7 +112,7 @@ function ServiceTable({ services }) {
   );
 }
 
-function AlertsTable({ alerts, metricsAvailable }) {
+function AlertsTable({ alerts, metricsAvailable, onResolve }) {
   if (!alerts.length) {
     return (
       <p className="p-5 text-sm text-slate-600">
@@ -130,6 +130,7 @@ function AlertsTable({ alerts, metricsAvailable }) {
             <th className="px-4 py-3">Severity</th>
             <th className="px-4 py-3">Component</th>
             <th className="px-4 py-3">Summary</th>
+            <th className="px-4 py-3">Action</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -139,6 +140,7 @@ function AlertsTable({ alerts, metricsAvailable }) {
               <td className="px-4 py-4"><StatusBadge status={alert.severity === 'critical' ? 'down' : 'warning'} label={alert.severity} /></td>
               <td className="px-4 py-4 text-slate-700">{alert.component}</td>
               <td className="max-w-xl px-4 py-4 text-slate-700">{alert.summary}</td>
+              <td className="px-4 py-4">{alert.eventId ? <button type="button" onClick={() => onResolve?.(alert.eventId)} className="rounded-md bg-slate-800 px-3 py-2 text-xs font-bold text-white">Resolve</button> : <span className="text-xs text-slate-400">Managed by Prometheus</span>}</td>
             </tr>
           ))}
         </tbody>
@@ -189,6 +191,10 @@ function SystemMonitoring({ activeView = 'overview' }) {
   const healthyServices = services.filter((service) => service.status === 'healthy').length;
   const metricsAvailable = infrastructure.source === 'prometheus';
   const overallStatus = summary?.status || (isRefreshing ? 'checking' : 'warning');
+  const resolveEvent = async (eventId) => {
+    try { await resolveSecurityEvent(eventId); await refresh(); }
+    catch (requestError) { setError(requestError.message || 'Security event could not be resolved.'); }
+  };
 
   const overview = (
     <div className="space-y-5">
@@ -210,7 +216,7 @@ function SystemMonitoring({ activeView = 'overview' }) {
         <div className="border-b border-slate-200 px-5 py-4">
           <h3 className="text-base font-bold text-[#003366]">Current Alerts</h3>
         </div>
-        <AlertsTable alerts={alerts.slice(0, 5)} metricsAvailable={metricsAvailable} />
+        <AlertsTable alerts={alerts.slice(0, 5)} metricsAvailable={metricsAvailable} onResolve={resolveEvent} />
       </section>
     </div>
   );
@@ -261,7 +267,7 @@ function SystemMonitoring({ activeView = 'overview' }) {
 
   const alertView = (
     <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
-      <AlertsTable alerts={alerts} metricsAvailable={metricsAvailable} />
+      <AlertsTable alerts={alerts} metricsAvailable={metricsAvailable} onResolve={resolveEvent} />
     </section>
   );
 

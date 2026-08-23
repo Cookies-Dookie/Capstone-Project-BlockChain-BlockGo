@@ -3,6 +3,7 @@ import { fetchAllGrades, approveGrade, finalizeGrade, returnGrade, batchUploadGr
 import { useNotification } from '../../services/NotificationContext';
 import ChairpersonHeader from './ChairpersonHeader';
 import ChairpersonSidebar from './ChairpersonSidebar';
+import CurriculumBuilder from './CurriculumBuilder';
 import ChairpersonOverview from './ChairpersonOverview';
 import FacultyStatusTable from '../faculty/FacultyStatusTable';
 import SectionReviewPanel from './SectionReviewPanel';
@@ -1351,6 +1352,10 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
                     faculty_id: loggedInEmail,
                     subject_code: selectedMySection.subject || 'Unknown',
                     subject_name: selectedMySection.subject || 'Unknown',
+                    professor_name: loggedInName || loggedInEmail,
+                    program: selectedMySection.department || '',
+                    term: activeEncodingTerm || 'midterm',
+                    units: Number(selectedMySection.units) || 3,
                     course: selectedMySection.department,
                     semester: selectedMySection.semester || activeSemester || "2nd Semester",
                     school_year: selectedMySection.schoolYear || "2024",
@@ -1521,6 +1526,9 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
                         <div className="flex flex-col gap-6">
                             <StudentSectioning chairpersonDepartment={department} />
                         </div>
+                    )}
+                    {activeChairTab === 'curriculum' && (
+                        <CurriculumBuilder department={department} />
                     )}
                     {activeChairTab === 'myClasses' && (
                         <div className="flex flex-col gap-6">
