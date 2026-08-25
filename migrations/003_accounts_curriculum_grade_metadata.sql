@@ -92,6 +92,19 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     CONSTRAINT ck_support_ticket_status CHECK (status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'))
 );
 
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+    request_id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    otp_code VARCHAR(6) NOT NULL,
+    expires_at BIGINT NOT NULL,
+    used_at BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_requests_email
+    ON password_reset_requests(LOWER(email), created_at DESC);
+
 CREATE TABLE IF NOT EXISTS security_events (
     security_event_id BIGSERIAL PRIMARY KEY,
     event_type VARCHAR(80) NOT NULL,

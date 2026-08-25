@@ -276,6 +276,102 @@ namespace Client_app.Services
                 warnings.Count == 0 ? null : string.Join(" ", warnings));
         }
 
+        public async Task<ManagedAccountResult> ResetPasswordAsync(
+            int userId,
+            string newPassword,
+            string actorEmail,
+            string actorRole,
+            string? ipAddress,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(newPassword) || newPassword.Length < 8 || newPassword.Length > 128)
+            {
+                throw new ArgumentException("The new password must be between 8 and 128 characters.");
+            }
+
+            var normalizedActorRole = NormalizeAccountRole(actorRole);
+            await using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+            (int Id, string AccountId, string FullName, string Email, string Role, string Status, bool IsActive, string? Department) target;
+            await using (var lookup = new NpgsqlCommand(@"
+                SELECT u.id, COALESCE(u.username, u.id::text),
+                       COALESCE(sp.full_name, fp.full_name, ap.full_name, u.email),
+                       u.email, u.role, u.status, u.is_active,
+                       COALESCE(sp.department, fp.department, ap.department)
+                FROM users u
+                LEFT JOIN studentprofiles sp ON sp.user_id = u.id
+                LEFT JOIN facultyprofiles fp ON fp.user_id = u.id
+                LEFT JOIN adminprofiles ap ON ap.user_id = u.id
+                WHERE u.id = @userId
+                FOR UPDATE OF u;", connection, transaction))
+            {
+                lookup.Parameters.AddWithValue("userId", userId);
+                await using var reader = await lookup.ExecuteReaderAsync(cancellationToken);
+                if (!await reader.ReadAsync(cancellationToken))
+                {
+                    throw new KeyNotFoundException("Account not found.");
+                }
+
+                target = (
+                    reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    NormalizeAccountRole(reader.GetString(4)), reader.GetString(5), reader.GetBoolean(6),
+                    reader.IsDBNull(7) ? null : reader.GetString(7));
+            }
+
+            var isAllowed = normalizedActorRole switch
+            {
+                "registrar" => target.Role is "student" or "faculty" or "department_admin",
+                "system_admin" => target.Role == "registrar",
+                _ => false
+            };
+            if (!isAllowed)
+            {
+                throw new UnauthorizedAccessException(normalizedActorRole == "registrar"
+                    ? "Registrars may reset passwords only for students, faculty, and department administrators."
+                    : "System Administrators may reset passwords only for Registrar accounts.");
+            }
+
+            await using (var update = new NpgsqlCommand(@"
+                UPDATE users
+                SET password_hash = crypt(@password, gen_salt('bf')),
+                    password_reset_token = NULL,
+                    password_reset_expires = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = @userId;", connection, transaction))
+            {
+                update.Parameters.AddWithValue("password", newPassword);
+                update.Parameters.AddWithValue("userId", userId);
+                await update.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var resetRequestTable = new NpgsqlCommand("SELECT to_regclass('public.password_reset_requests') IS NOT NULL;", connection, transaction))
+            {
+                var hasResetRequestTable = Convert.ToBoolean(await resetRequestTable.ExecuteScalarAsync(cancellationToken));
+                if (hasResetRequestTable)
+                {
+                    await using var expireRequests = new NpgsqlCommand(@"
+                        UPDATE password_reset_requests
+                        SET used_at = (EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000)::BIGINT
+                        WHERE user_id = @userId AND used_at IS NULL;", connection, transaction);
+                    expireRequests.Parameters.AddWithValue("userId", userId);
+                    await expireRequests.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+
+            await _auditLog.LogAsync(
+                actorEmail, normalizedActorRole, "ACCOUNT_PASSWORD_RESET", "user", userId.ToString(),
+                new { target.Role, target.Email },
+                new { target.Role, target.Email, passwordReset = true },
+                $"{normalizedActorRole} manually reset the password of a {target.Role} account.",
+                ipAddress, connection, transaction, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return new ManagedAccountResult(target.Id, target.AccountId, target.FullName, target.Email, target.Role,
+                target.Status, target.IsActive, target.Department, true);
+        }
+
         private async Task RegisterFabricIdentityAsync(string email, string password, string role, CancellationToken cancellationToken)
         {
             var client = _httpClientFactory.CreateClient();
@@ -373,6 +469,17 @@ namespace Client_app.Services
                 "faculty" => "faculty",
                 "chairperson" or "department_head" or "dept_head" or "department_admin" or "dept_admin" => "department_admin",
                 _ => throw new ArgumentException("Role must be Faculty or Chairperson/Department Head.")
+            };
+        }
+
+        private static string NormalizeAccountRole(string role)
+        {
+            var normalized = role.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+            return normalized switch
+            {
+                "dept_admin" or "deptadmin" or "department" or "admin" or "chairperson" or "department_head" or "dept_head" => "department_admin",
+                "systemadmin" => "system_admin",
+                _ => normalized
             };
         }
 

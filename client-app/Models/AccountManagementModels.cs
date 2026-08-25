@@ -58,6 +58,12 @@ namespace Client_app.Models
         public bool? IsActive { get; set; }
     }
 
+    public sealed class ManualPasswordResetRequest
+    {
+        [Required, MinLength(8), StringLength(128)]
+        public string NewPassword { get; set; } = string.Empty;
+    }
+
     public sealed record ManagedAccountResult(
         int Id,
         string AccountId,

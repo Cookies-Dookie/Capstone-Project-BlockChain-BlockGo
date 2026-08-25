@@ -123,12 +123,14 @@ export const forgotPassword = (email) => {
     });
 };
 
-export const resetPassword = (token, newPassword) => {
+export const resetPassword = ({ email, otp, newPassword }) => {
     return fetchPublic('/reset-password', { 
         method: 'POST', 
-        body: JSON.stringify({ token, newPassword }) 
+        body: JSON.stringify({ email, otp, newPassword })
     });
 };
+
+export const fetchPasswordResetRequests = async () => fetchWithAuth('/password-reset-requests');
 
 export const hashPassword = async (password) => {
     return await fetchPublic('/crypto/hash-password', {
@@ -170,6 +172,10 @@ export const updateRegistrarAccount = async (userId, changes) => fetchWithAuth(`
     method: 'PUT',
     body: JSON.stringify(changes),
 });
+export const resetManagedAccountPassword = async (userId, newPassword) => fetchWithAuth(`/AccountManagement/users/${encodeURIComponent(userId)}/password`, {
+    method: 'PUT',
+    body: JSON.stringify({ newPassword }),
+});
 
 // ==================== CURRICULUM CHECKLISTS ====================
 export const fetchAcademicPrograms = async () => fetchWithAuth('/Curriculums/programs');
@@ -191,6 +197,7 @@ export const fetchFacultyCurriculums = async () => fetchWithAuth('/Curriculums/f
 
 // ==================== REGISTRAR SUPPORT TICKETS ====================
 export const fetchSupportTickets = async () => fetchWithAuth('/SupportTickets');
+export const fetchSupportPersonnel = async () => fetchWithAuth('/SupportTickets/personnel');
 export const createSupportTicket = async (ticket) => fetchWithAuth('/SupportTickets', { method: 'POST', body: JSON.stringify(ticket) });
 export const updateSupportTicket = async (id, update) => fetchWithAuth(`/SupportTickets/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(update) });
 export const resolveSecurityEvent = async (id) => fetchWithAuth(`/SystemMonitoring/security-events/${encodeURIComponent(id)}/resolve`, { method: 'POST' });
@@ -339,6 +346,13 @@ export const fetchSystemMonitoringSummary = async ({ signal } = {}) => {
         method: 'GET',
         cache: 'no-store',
         signal,
+    });
+};
+
+export const createSystemAdminGrafanaSession = async () => {
+    return await fetchWithAuth('/SystemMonitoring/grafana/session', {
+        method: 'POST',
+        cache: 'no-store',
     });
 };
 
@@ -683,6 +697,11 @@ export const correctGrade = async (payload) => {
         body: JSON.stringify(payload)
     });
 };
+
+export const correctFinalizedGradeAsRegistrar = async (recordId, payload) => fetchWithAuth(`/Grades/registrar-correct/${encodeURIComponent(recordId)}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+});
 
 export const flagGrade = async (recordId, payload = {}) => {
     return await fetchWithAuth(`/Grades/flag/${encodeURIComponent(recordId)}`, {

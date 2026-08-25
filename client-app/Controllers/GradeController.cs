@@ -549,9 +549,9 @@ namespace BlockGo.Controllers
             if (rawAverage >= 94) return 1.25;
             if (rawAverage >= 91) return 1.50;
             if (rawAverage >= 88) return 1.75;
-            if (rawAverage >= 85) return 2.00;
-            if (rawAverage >= 82) return 2.25;
-            if (rawAverage >= 79) return 2.50;
+            if (rawAverage >= 84) return 2.00;
+            if (rawAverage >= 81) return 2.25;
+            if (rawAverage >= 78) return 2.50;
             if (rawAverage >= 75) return 3.00;
             return 5.00;
         }
@@ -581,6 +581,51 @@ namespace BlockGo.Controllers
                 finals = finals > 0 ? finals.ToString("0.##") : "",
                 finalAverage = ToUniversityGrade(rawAverage).ToString("0.00")
             });
+        }
+
+        private static (string Payload, string OldRawGrade, string Equivalent, string Term) BuildRegistrarCorrectionPayload(
+            string? existingPayload,
+            string? requestedTerm,
+            double newRawGrade)
+        {
+            var gradeObject = new System.Text.Json.Nodes.JsonObject();
+            if (!string.IsNullOrWhiteSpace(existingPayload) && existingPayload.TrimStart().StartsWith("{"))
+            {
+                try { gradeObject = System.Text.Json.Nodes.JsonNode.Parse(existingPayload)?.AsObject() ?? gradeObject; }
+                catch { }
+            }
+
+            static double ReadNumber(System.Text.Json.Nodes.JsonObject source, string property)
+            {
+                var value = source[property]?.ToString();
+                return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+            }
+
+            var midterm = ReadNumber(gradeObject, "midterm");
+            var finals = ReadNumber(gradeObject, "finals");
+            var normalizedTerm = string.Equals(requestedTerm, "midterm", StringComparison.OrdinalIgnoreCase)
+                ? "midterm"
+                : string.Equals(requestedTerm, "finals", StringComparison.OrdinalIgnoreCase)
+                    ? "finals"
+                    : finals > 0 ? "finals" : "midterm";
+            var oldRawGrade = normalizedTerm == "finals" ? finals : midterm;
+
+            if (normalizedTerm == "finals") finals = newRawGrade;
+            else midterm = newRawGrade;
+
+            var rawAverage = normalizedTerm == "finals"
+                ? (midterm > 0 ? (midterm + finals) / 2 : finals)
+                : midterm;
+            var equivalent = ToUniversityGrade(rawAverage).ToString("0.00", CultureInfo.InvariantCulture);
+            gradeObject["midterm"] = midterm > 0 ? midterm.ToString("0.##", CultureInfo.InvariantCulture) : "";
+            gradeObject["finals"] = finals > 0 ? finals.ToString("0.##", CultureInfo.InvariantCulture) : "";
+            gradeObject["finalAverage"] = equivalent;
+
+            return (
+                gradeObject.ToJsonString(),
+                oldRawGrade > 0 ? oldRawGrade.ToString("0.##", CultureInfo.InvariantCulture) : existingPayload ?? "",
+                equivalent,
+                normalizedTerm);
         }
 
         private delegate string? GetValDelegate(params string[] cols);
@@ -915,8 +960,8 @@ namespace BlockGo.Controllers
                                 }
                                 _logger.LogInformation("Encrypted finals file distributed to IPFS. CID: {CID}", ipfsCid);
                                 
-                                // Explicitly distribute pin to other nodes in the cluster (fire-and-forget)
-                                _ = Task.Run(() => DistributePinAsync(ipfsCid));
+                                // Do not report storage success until every campus has pinned the CID.
+                                await DistributePinAsync(ipfsCid);
                             }
                         }
                         catch (Exception ex) { _logger.LogWarning("IPFS upload skipped (daemon may be offline): {Message}", ex.Message); }
@@ -1408,6 +1453,87 @@ namespace BlockGo.Controllers
             }
             catch (Exception ex)
             {
+                return StatusCode(500, new { status = "Error", message = ex.Message });
+            }
+        }
+
+        public sealed class RegistrarGradeCorrectionRequest
+        {
+            public double NewGrade { get; set; }
+            public string? Term { get; set; }
+            public string Reason { get; set; } = string.Empty;
+        }
+
+        [HttpPost("registrar-correct/{recordId}")]
+        [Authorize(Roles = "registrar")]
+        public async Task<IActionResult> CorrectFinalizedGradeAsRegistrar(string recordId, [FromBody] RegistrarGradeCorrectionRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(recordId))
+                return BadRequest(new { status = "Error", message = "A ledger record is required." });
+            if (request.NewGrade < 0 || request.NewGrade > 100)
+                return BadRequest(new { status = "Error", message = "The grade must be between 0 and 100." });
+            if (string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Trim().Length < 5)
+                return BadRequest(new { status = "Error", message = "Enter a correction reason of at least 5 characters." });
+
+            var actorEmail = AuthenticatedEmail();
+            try
+            {
+                await using var connection = new NpgsqlConnection(_connectionString);
+                await connection.OpenAsync();
+                if (!await CanAccessGradeRecordAsync(connection, recordId, actorEmail, "registrar")) return Forbid();
+
+                var ledgerJson = await _blockchainService.GetGradeAsync(recordId, actorEmail);
+                var record = JsonSerializer.Deserialize<AcademicRecord>(ledgerJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (record == null) return NotFound(new { status = "Error", message = "The selected grade was not found on the ledger." });
+                if (!string.Equals(record.Status, "Finalized", StringComparison.OrdinalIgnoreCase))
+                    return Conflict(new { status = "Error", message = "Registrar corrections are limited to finalized ledger grades." });
+
+                var correction = BuildRegistrarCorrectionPayload(record.Grade, request.Term ?? record.Term, request.NewGrade);
+                record.Grade = correction.Payload;
+                record.Term = correction.Term;
+                record.Status = "Returned";
+                record.Note = request.Reason.Trim();
+                record.Date = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+
+                await _blockchainService.ReturnGradeAsync(recordId, request.Reason.Trim(), actorEmail);
+                await _blockchainService.UpdateGradeAsync(record, actorEmail);
+                await _blockchainService.ApproveGradeAsync(recordId, actorEmail);
+                await _blockchainService.FinalizeGradeAsync(recordId, actorEmail);
+
+                await using (var log = new NpgsqlCommand(@"
+                    INSERT INTO gradecorrectionlogs (recordid, oldgrade, newgrade, reasontext, approvedby, timestamp)
+                    VALUES (@recordId, @oldGrade, @newGrade, @reason, @actor, CURRENT_TIMESTAMP);", connection))
+                {
+                    log.Parameters.AddWithValue("recordId", recordId);
+                    log.Parameters.AddWithValue("oldGrade", correction.OldRawGrade);
+                    log.Parameters.AddWithValue("newGrade", request.NewGrade.ToString("0.##", CultureInfo.InvariantCulture));
+                    log.Parameters.AddWithValue("reason", request.Reason.Trim());
+                    log.Parameters.AddWithValue("actor", actorEmail);
+                    await log.ExecuteNonQueryAsync();
+                }
+
+                await NotifyAcademicDataChangedAsync("registrar_grade_corrected", record.Course, actorEmail);
+                return Ok(new
+                {
+                    status = "Success",
+                    message = $"{record.SubjectCode} was corrected and finalized on the ledger.",
+                    data = new
+                    {
+                        recordId,
+                        subjectCode = record.SubjectCode,
+                        subjectTitle = record.SubjectTitle,
+                        oldGrade = correction.OldRawGrade,
+                        newGrade = request.NewGrade.ToString("0.##", CultureInfo.InvariantCulture),
+                        equivalent = correction.Equivalent,
+                        term = correction.Term,
+                        ledgerCommitted = true,
+                        ledgerStatus = "Finalized"
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Registrar correction failed for ledger record {RecordId}", recordId);
                 return StatusCode(500, new { status = "Error", message = ex.Message });
             }
         }
@@ -2359,8 +2485,8 @@ namespace BlockGo.Controllers
                         } catch { }
                     }
 
-                    // Explicitly distribute pin to other nodes in the cluster
-                    _ = Task.Run(() => DistributePinAsync(cid));
+                    // A successful response guarantees durable pins at all three campuses.
+                    await DistributePinAsync(cid);
 
                     return Ok(new { status = "Success", cid = cid, url = $"/ipfs/{cid}", message = "File encrypted and securely distributed to IPFS." });
                 }
@@ -2370,6 +2496,7 @@ namespace BlockGo.Controllers
         }
 
         [HttpGet("view-ipfs/{cid}")]
+        [HttpPost("view-ipfs/{cid}")]
         [Authorize(Roles = "faculty,department_admin,registrar")]
         public async Task<IActionResult> ViewIpfsFile(string cid)
         {
@@ -2378,6 +2505,24 @@ namespace BlockGo.Controllers
             if (string.IsNullOrEmpty(vaultPassword)) vaultPassword = Request.Query["password"].ToString();
             if (string.IsNullOrEmpty(vaultPassword)) vaultPassword = Request.Query["vault_password"].ToString();
             if (string.IsNullOrEmpty(vaultPassword)) vaultPassword = Request.Query["vaultpass"].ToString();
+
+            // The application viewer submits the password as JSON so it is not
+            // exposed in the URL or routine reverse-proxy access logs.
+            if (string.IsNullOrEmpty(vaultPassword) && HttpMethods.IsPost(Request.Method))
+            {
+                try
+                {
+                    using var requestBody = await JsonDocument.ParseAsync(Request.Body);
+                    if (requestBody.RootElement.TryGetProperty("vaultPassword", out var passwordProperty))
+                    {
+                        vaultPassword = passwordProperty.GetString() ?? string.Empty;
+                    }
+                }
+                catch (JsonException)
+                {
+                    return BadRequest(new { status = "Error", message = "A valid vault password request is required." });
+                }
+            }
 
             if (string.IsNullOrEmpty(vaultPassword))
             {
@@ -2508,6 +2653,100 @@ namespace BlockGo.Controllers
                 bool isPdf = (buffer[0] == 0x25 && buffer[1] == 0x50 && buffer[2] == 0x44 && buffer[3] == 0x46);
                 
                 var textContent = System.Text.Encoding.UTF8.GetString(decryptedData);
+
+                // Convert JSON records into rows before the generic CSV check. JSON
+                // commonly contains commas, so treating it as CSV produces unlabeled,
+                // fragmented values in the viewer.
+                var jsonHeaders = new List<string>();
+                var jsonRows = new List<Dictionary<string, string>>();
+                try
+                {
+                    using var jsonDocument = JsonDocument.Parse(textContent);
+
+                    static string FormatJsonValue(JsonElement value)
+                    {
+                        return value.ValueKind switch
+                        {
+                            JsonValueKind.String => value.GetString() ?? string.Empty,
+                            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+                            JsonValueKind.True => "Yes",
+                            JsonValueKind.False => "No",
+                            JsonValueKind.Object => string.Join("; ", value.EnumerateObject().Select(property =>
+                                $"{FormatJsonHeader(property.Name)}: {FormatJsonValue(property.Value)}")),
+                            JsonValueKind.Array => string.Join(", ", value.EnumerateArray().Select(FormatJsonValue)),
+                            _ => value.ToString()
+                        };
+                    }
+
+                    void AddJsonObject(JsonElement jsonObject)
+                    {
+                        var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var property in jsonObject.EnumerateObject())
+                        {
+                            if (!jsonHeaders.Contains(property.Name, StringComparer.OrdinalIgnoreCase))
+                            {
+                                jsonHeaders.Add(property.Name);
+                            }
+                            row[property.Name] = FormatJsonValue(property.Value);
+                        }
+                        jsonRows.Add(row);
+                    }
+
+                    if (jsonDocument.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        AddJsonObject(jsonDocument.RootElement);
+                    }
+                    else if (jsonDocument.RootElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in jsonDocument.RootElement.EnumerateArray())
+                        {
+                            if (item.ValueKind == JsonValueKind.Object)
+                            {
+                                AddJsonObject(item);
+                            }
+                            else
+                            {
+                                if (!jsonHeaders.Contains("value", StringComparer.OrdinalIgnoreCase))
+                                {
+                                    jsonHeaders.Add("value");
+                                }
+                                jsonRows.Add(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                                {
+                                    ["value"] = FormatJsonValue(item)
+                                });
+                            }
+                        }
+                    }
+                    else
+                    {
+                        jsonHeaders.Add("value");
+                        jsonRows.Add(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["value"] = FormatJsonValue(jsonDocument.RootElement)
+                        });
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Non-JSON content continues through the existing PDF/CSV/text viewer.
+                }
+
+                static string FormatJsonHeader(string header)
+                {
+                    var spaced = Regex.Replace(header, "([a-z0-9])([A-Z])", "$1 $2")
+                        .Replace('_', ' ')
+                        .Replace('-', ' ');
+                    var words = spaced.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(word => word.ToLowerInvariant() switch
+                        {
+                            "id" => "ID",
+                            "ipfs" => "IPFS",
+                            "gpa" => "GPA",
+                            "cid" => "CID",
+                            _ => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(word.ToLowerInvariant())
+                        });
+                    return string.Join(" ", words);
+                }
                 
                 // --- CLOUD VIEWER HTML ---
                 var viewerHtml = $@"
@@ -2552,6 +2791,28 @@ namespace BlockGo.Controllers
                 {
                     var base64Pdf = Convert.ToBase64String(decryptedData);
                     viewerHtml += $@"<embed src='data:application/pdf;base64,{base64Pdf}' type='application/pdf' />";
+                }
+                else if (jsonRows.Count > 0)
+                {
+                    viewerHtml += "<table><thead><tr>";
+                    foreach (var header in jsonHeaders)
+                    {
+                        viewerHtml += $"<th>{System.Net.WebUtility.HtmlEncode(FormatJsonHeader(header))}</th>";
+                    }
+                    viewerHtml += "</tr></thead><tbody>";
+
+                    foreach (var row in jsonRows)
+                    {
+                        viewerHtml += "<tr>";
+                        foreach (var header in jsonHeaders)
+                        {
+                            row.TryGetValue(header, out var value);
+                            viewerHtml += $"<td>{System.Net.WebUtility.HtmlEncode(value ?? string.Empty)}</td>";
+                        }
+                        viewerHtml += "</tr>";
+                    }
+
+                    viewerHtml += "</tbody></table>";
                 }
                 else if (textContent.Contains(",") || textContent.Contains("\t"))
                 {
@@ -2598,27 +2859,26 @@ namespace BlockGo.Controllers
         {
             if (string.IsNullOrEmpty(cid)) return;
 
-            // List of IPFS nodes in the distributed network
-            var nodes = new[] { "ipfs0", "ipfs1", "ipfs2", "ipfs3", "ipfs4", "ipfs5" };
+            var configuredNodes = Environment.GetEnvironmentVariable("IPFS_PEER_NODES");
+            var nodes = (configuredNodes ?? Environment.GetEnvironmentVariable("IPFS_HOST") ?? "ipfs-api.plv-fabric.svc.cluster.local")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
             
             var pinTasks = nodes.Select(async node =>
             {
-                try
+                using var client = _httpClientFactory.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(120);
+
+                var pinUrl = $"http://{node}:5001/api/v0/pin/add?arg={Uri.EscapeDataString(cid)}&recursive=true";
+                using var response = await client.PostAsync(pinUrl, null);
+                if (!response.IsSuccessStatusCode)
                 {
-                    using var client = _httpClientFactory.CreateClient();
-                    client.Timeout = TimeSpan.FromSeconds(10); // Slightly longer timeout per node
-                    
-                    var pinUrl = $"http://{node}:5001/api/v0/pin/add?arg={cid}";
-                    var response = await client.PostAsync(pinUrl, null);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        _logger.LogInformation("Successfully distributed/pinned CID {CID} to node {Node}", cid, node);
-                    }
+                    var body = await response.Content.ReadAsStringAsync();
+                    throw new HttpRequestException($"IPFS node {node} rejected pin {cid}: {(int)response.StatusCode} {body}");
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning("Failed to distribute pin to {Node}: {Message}", node, ex.Message);
-                }
+
+                _logger.LogInformation("Successfully distributed/pinned CID {CID} to node {Node}", cid, node);
             });
 
             await Task.WhenAll(pinTasks);

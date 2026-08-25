@@ -17,12 +17,12 @@ data:
     }
 
     upstream ipfs_gateway {
-      server ipfs-gateway.plv-fabric.svc.cluster.local:8080;
+      server ipfs-ha-gateway.plv-fabric.svc.cluster.local:8080;
       keepalive 8;
     }
 
     upstream ipfs_api {
-      server ipfs-api.plv-fabric.svc.cluster.local:5001;
+      server ipfs-ha-api.plv-fabric.svc.cluster.local:5001;
       keepalive 8;
     }
 
@@ -62,11 +62,15 @@ data:
       }
 
       location /ipfs-webui/ {
+        proxy_set_header Host localhost:5001;
+        proxy_set_header Origin "";
         rewrite ^/ipfs-webui/(.*) /webui/$1 break;
         proxy_pass http://ipfs_api;
       }
 
       location /api/v0/ {
+        proxy_set_header Host localhost:5001;
+        proxy_set_header Origin "";
         proxy_pass http://ipfs_api;
       }
 

@@ -84,6 +84,12 @@ function fabricEndpointUrls() {
     };
 }
 
+function fabricDiscoveryEnabled() {
+    const configured = process.env.FABRIC_DISCOVERY_ENABLED;
+    if (configured !== undefined) return ['1', 'true', 'yes', 'on'].includes(String(configured).trim().toLowerCase());
+    return Boolean(process.env.KUBERNETES_SERVICE_HOST);
+}
+
 function profileForIdentity(identity) {
     const profile = structuredClone(loadBaseProfile());
     const organization = Object.entries(profile.organizations || {}).find(([, details]) => details.mspid === identity.mspId)?.[0];
@@ -165,7 +171,10 @@ async function contractForUser(username, roleHint) {
     await gateway.connect(profileForIdentity(found.identity), {
         wallet: found.wallet,
         identity: username,
-        discovery: { enabled: Boolean(process.env.KUBERNETES_SERVICE_HOST), asLocalhost: !isContainerized() }
+        // Kubernetes DNS can route the explicit FQDNs in profileForIdentity. Fabric
+        // discovery may return channel endpoints advertised for another namespace
+        // (or external orderer hostnames), so it must be explicitly opt-in there.
+        discovery: { enabled: fabricDiscoveryEnabled(), asLocalhost: !isContainerized() }
     });
     const network = await gateway.getNetwork(process.env.CHANNEL_NAME || 'registrar-channel');
     const contract = network.getContract(process.env.CHAINCODE_NAME || 'registrar');

@@ -10,20 +10,7 @@ import SectionReviewPanel from './SectionReviewPanel';
 import Modal from '../../services/Modal';
 import StudentSectioning from './StudentSectioning';
 import AcademicAssignment from './AcademicAssignment';
-
-const getGradeEquivalent = (grade) => {
-    const n = parseFloat(grade);
-    if (isNaN(n) || n === 0) return '5.00';
-    if (n >= 98.5) return '1.00';
-    if (n >= 94) return '1.25';
-    if (n >= 91) return '1.50';
-    if (n >= 88) return '1.75';
-    if (n >= 85) return '2.00';
-    if (n >= 82) return '2.25';
-    if (n >= 79) return '2.50';
-    if (n >= 75) return '3.00';
-    return '5.00';
-};
+import { getGradeEquivalent } from '../../utils/gradingHelpers';
 
 const getRecordGrade = (record) => record?.grade || record?.Grade || '';
 

@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Npgsql;
 
 namespace Client_app.Controllers
@@ -15,16 +18,106 @@ namespace Client_app.Controllers
         private readonly string _connectionString;
         private readonly string _middlewareUrl;
         private readonly string? _prometheusUrl;
+        private readonly string _grafanaUrl;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IMemoryCache _cache;
+        private const string GrafanaSessionCookie = "blockgo_grafana_session";
 
-        public SystemMonitoringController(IConfiguration configuration, IHttpClientFactory httpClientFactory)
+        public SystemMonitoringController(IConfiguration configuration, IHttpClientFactory httpClientFactory, IMemoryCache cache)
         {
             _connectionString = configuration.GetConnectionString("MasterConnection")
                 ?? configuration.GetConnectionString("PostgresConnection")
                 ?? throw new InvalidOperationException("A PostgreSQL connection is required.");
             _middlewareUrl = configuration["Middleware:Url"] ?? "http://middleware:4000";
             _prometheusUrl = configuration["Monitoring:PrometheusUrl"] ?? Environment.GetEnvironmentVariable("PROMETHEUS_URL");
+            _grafanaUrl = configuration["Monitoring:GrafanaUrl"]
+                ?? Environment.GetEnvironmentVariable("GRAFANA_URL")
+                ?? "http://grafana.plv-fabric.svc.cluster.local:3000";
             _httpClientFactory = httpClientFactory;
+            _cache = cache;
+        }
+
+        [HttpPost("grafana/session")]
+        public IActionResult CreateGrafanaSession()
+        {
+            var sessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            var cacheKey = GrafanaCacheKey(sessionToken);
+            var actor = User.Identity?.Name ?? "system-admin@blockgo.local";
+            _cache.Set(cacheKey, actor, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(8),
+                SlidingExpiration = TimeSpan.FromMinutes(30)
+            });
+            Response.Cookies.Append(GrafanaSessionCookie, sessionToken, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = Request.IsHttps,
+                SameSite = SameSiteMode.Strict,
+                Path = "/api/SystemMonitoring/grafana",
+                MaxAge = TimeSpan.FromMinutes(30),
+                IsEssential = true
+            });
+            return Ok(new { status = "Success", url = "/api/SystemMonitoring/grafana/" });
+        }
+
+        [AllowAnonymous]
+        [AcceptVerbs("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")]
+        [Route("grafana/{**path}")]
+        public async Task ProxyGrafana(string? path, CancellationToken cancellationToken)
+        {
+            if (!TryGetGrafanaActor(out var actor))
+            {
+                Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await Response.WriteAsJsonAsync(new { status = "Error", message = "A System Admin Grafana session is required." }, cancellationToken);
+                return;
+            }
+
+            var relativePath = (path ?? string.Empty).TrimStart('/');
+            if (relativePath.Contains("://", StringComparison.Ordinal) || relativePath.Contains("..", StringComparison.Ordinal))
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
+
+            // Grafana is configured with serve_from_sub_path at this public route. Forwarding
+            // only the captured remainder makes Grafana redirect to its configured root URL;
+            // HttpClient then follows that public localhost redirect from inside this pod and
+            // fails with connection refused. Preserve the configured subpath on the upstream
+            // request so Grafana serves the resource directly.
+            var targetUrl = $"{_grafanaUrl.TrimEnd('/')}/api/SystemMonitoring/grafana/{relativePath}{Request.QueryString}";
+            using var proxyRequest = new HttpRequestMessage(new HttpMethod(Request.Method), targetUrl);
+            var requestHasBody = Request.ContentLength.GetValueOrDefault() > 0 || Request.Headers.ContainsKey("Transfer-Encoding");
+            if (requestHasBody) proxyRequest.Content = new StreamContent(Request.Body);
+
+            foreach (var header in Request.Headers)
+            {
+                if (header.Key.Equals("Host", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("X-WEBAUTH-USER", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("X-WEBAUTH-NAME", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("X-Forwarded-Prefix", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!proxyRequest.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()))
+                    proxyRequest.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
+            }
+            proxyRequest.Headers.TryAddWithoutValidation("X-WEBAUTH-USER", actor);
+            proxyRequest.Headers.TryAddWithoutValidation("X-WEBAUTH-NAME", "BlockGO System Administrator");
+            proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-Prefix", "/api/SystemMonitoring/grafana");
+
+            using var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromMinutes(5);
+            using var proxyResponse = await client.SendAsync(proxyRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            Response.StatusCode = (int)proxyResponse.StatusCode;
+            foreach (var header in proxyResponse.Headers)
+                Response.Headers.Append(header.Key, header.Value.ToArray());
+            foreach (var header in proxyResponse.Content.Headers)
+                Response.Headers.Append(header.Key, header.Value.ToArray());
+            Response.Headers.Remove("transfer-encoding");
+            Response.Headers.Remove("connection");
+            await proxyResponse.Content.CopyToAsync(Response.Body, cancellationToken);
         }
 
         [HttpGet("summary")]
@@ -180,5 +273,20 @@ namespace Client_app.Controllers
         private static string SafeMessage(Exception exception) => exception is TaskCanceledException ? "Health check timed out." : exception.Message;
         private static string JsonText(JsonElement element, string property, string fallback) =>
             element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) ? value.ToString() : fallback;
+
+        private bool TryGetGrafanaActor(out string actor)
+        {
+            actor = string.Empty;
+            return Request.Cookies.TryGetValue(GrafanaSessionCookie, out var sessionToken)
+                && !string.IsNullOrWhiteSpace(sessionToken)
+                && _cache.TryGetValue(GrafanaCacheKey(sessionToken), out actor!)
+                && !string.IsNullOrWhiteSpace(actor);
+        }
+
+        private static string GrafanaCacheKey(string sessionToken)
+        {
+            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(sessionToken));
+            return $"system-admin:grafana:{Convert.ToHexString(digest)}";
+        }
     }
 }

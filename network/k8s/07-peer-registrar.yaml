@@ -72,6 +72,8 @@ spec:
           name: chaincode
         - containerPort: 7053
           name: events
+        - containerPort: 9443
+          name: operations
         env:
         - name: FABRIC_CFG_PATH
           value: /etc/hyperledger/fabric
@@ -115,6 +117,10 @@ spec:
             secretKeyRef:
               name: blockgo-secrets
               key: COUCHDB_PASS
+        - name: CORE_METRICS_PROVIDER
+          value: prometheus
+        - name: CORE_OPERATIONS_LISTENADDRESS
+          value: 0.0.0.0:9443
         volumeMounts:
         - name: peer-storage
           mountPath: /var/hyperledger/production
@@ -180,6 +186,9 @@ spec:
   ports:
   - port: 7051
     name: peer
+  - port: 9443
+    targetPort: 9443
+    name: operations
 ---
 apiVersion: apps/v1
 kind: StatefulSet

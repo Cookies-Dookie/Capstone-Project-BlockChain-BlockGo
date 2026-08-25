@@ -14,17 +14,12 @@ const Login = ({ onLogin }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [resetToken, setResetToken] = useState('');
+  const [resetOtp, setResetOtp] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const token = urlParams.get('token');
-    if (token || window.location.pathname.includes('/reset-password')) {
-      if (token) setResetToken(token);
-      setCurrentView('resetPassword');
-    }
+    if (window.location.pathname.includes('/reset-password')) setCurrentView('resetPassword');
   }, []);
 
   const validatePassword = (pwd) => {
@@ -65,7 +60,8 @@ const Login = ({ onLogin }) => {
     setMessage('');
     try {
       const data = await forgotPassword(email);
-      setMessage(data.message || 'Reset link sent.');
+      setMessage(data.message || 'Reset OTP sent.');
+      setCurrentView('resetPassword');
     } catch (error) {
       setError(error.message);
     }
@@ -89,7 +85,7 @@ const Login = ({ onLogin }) => {
     setError('');
     setMessage('');
     try {
-      const data = await resetPassword(resetToken, password);
+      const data = await resetPassword({ email, otp: resetOtp, newPassword: password });
       setMessage(data.message || 'Password updated successfully.');
       setTimeout(() => {
         setCurrentView('signIn');
@@ -241,13 +237,13 @@ const Login = ({ onLogin }) => {
           {/* FORGOT PASSWORD FORM */}
           {currentView === 'forgotPassword' && (
             <form className="login-form" onSubmit={handleForgotPassword}>
-              <p style={{ textAlign: 'center', marginBottom: '15px', color: '#666' }}>Enter your email to receive a password reset link.</p>
+              <p style={{ textAlign: 'center', marginBottom: '15px', color: '#666' }}>Enter your email to receive a password reset OTP.</p>
               <div className="input-group">
                 <label>Email</label>
                 <input type="email" placeholder="Your registered email" value={email} onChange={(e) => setEmail(e.target.value)} required />
               </div>
               <button type="submit" className="sign-in-btn" disabled={isLoading}>
-                {isLoading ? (<><span className="spinner"></span> Sending...</>) : 'Send Reset Link'}
+                {isLoading ? (<><span className="spinner"></span> Sending...</>) : 'Send Reset OTP'}
               </button>
             </form>
           )}
@@ -255,7 +251,11 @@ const Login = ({ onLogin }) => {
           {/* RESET PASSWORD FORM */}
           {currentView === 'resetPassword' && (
             <form className="login-form" onSubmit={handleResetSubmit}>
-              <p style={{ textAlign: 'center', marginBottom: '15px', color: '#666' }}>Enter your new password below.</p>
+              <p style={{ textAlign: 'center', marginBottom: '15px', color: '#666' }}>Enter the OTP sent to your email and create a new password.</p>
+              <div className="input-group">
+                <label>Reset OTP</label>
+                <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" placeholder="6-digit OTP" value={resetOtp} onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ''))} required />
+              </div>
               {renderPasswordInput({
                 label: "New Password",
                 value: password,

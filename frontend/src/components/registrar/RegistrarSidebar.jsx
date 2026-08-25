@@ -17,6 +17,7 @@ function RegistrarSidebar({
     "createAccounts",
     "curriculum",
     "tickets",
+    "passwordResets",
     "revokeAccounts",
     "assignStudents",
     "assignAdmins",

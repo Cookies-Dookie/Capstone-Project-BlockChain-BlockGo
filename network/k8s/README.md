@@ -30,6 +30,19 @@ chmod +x ./full_deploy.sh
 kubectl logs deployment/middleware-api -n plv-fabric -f
 ```
 
+The local `apply` command rebuilds `frontend:latest`, `client-app:latest`, the
+middleware image, and all three chaincode images directly from the current
+workspace before restarting the Kubernetes Deployments. It also stops before
+deployment if the required college grade-equivalent or Fabric timestamp fixes
+are missing. This prevents Docker Desktop from silently reusing stale frontend
+or backend images after a code change. Chaincode Deployments are restarted even
+when their Fabric package IDs are unchanged, ensuring rebuilt chaincode images
+also take effect.
+
+Production deployments use the registry images declared in the manifests.
+Build and publish those images from this same source revision before running
+`production apply`.
+
 The local profile does not create application HPAs because Docker Desktop does
 not expose the `metrics.k8s.io` resource metrics API by default. The production
 profile applies `11a-application-hpa.yaml`; confirm the target cluster provides
@@ -155,13 +168,38 @@ in PostgreSQL `pending_grade_records` until finalization succeeds.
 | Fabric CA | Deployment | 3 | ephemeral |
 | CouchDB | StatefulSet | 1 | 30Gi |
 | Middleware API | Deployment | 2-5 (HPA) | ephemeral |
-| IPFS Nodes | StatefulSet | 3 | 100Gi |
+| IPFS Nodes | StatefulSet | 3 (Main, Annex, Pubad) | 5Gi per node (10Gi in the local profile) |
 
 ## Storage
 
 - **StorageClass**: `fabric-storage` (host-path provisioner)
 - **Persistent Volumes**: Created on node `/mnt/data/` directories
 - **For production**: Use CSI drivers (AWS EBS, GCP Persistent Disk, Azure Disk, NFS)
+
+### Private IPFS Web UI
+
+The Main, Annex, and Pubad repositories use one private swarm key and
+intentionally have no public bootstrap peers. They form a full mesh, while
+`ipfs-ha-api` and `ipfs-ha-gateway` provide automatic campus failover. The
+cluster bootstrap job copies every existing recursive Main pin to Annex and
+Pubad; new academic-record uploads are pinned on all three nodes by `client-app`.
+The `ipfs-pin-reconciler` also synchronizes manual Web UI/API pins every minute
+and lets a campus node catch up after it returns from an outage.
+
+Kubo therefore cannot fetch its Web UI DAG from the public network at runtime.
+`09a-ipfs-webui-bootstrap.yaml` downloads the Web UI CAR that matches Kubo 0.41,
+imports it into all three repositories, and recursively pins it. The deployment
+script reruns this idempotent bootstrap after the private mesh is ready.
+
+With the frontend port-forward running, open:
+
+```text
+http://localhost:8080/ipfs-webui/
+```
+
+The Web UI uses the same-origin `/api/v0/` proxy. Keep this management route
+limited to trusted administrator networks in production; the application-facing
+encrypted record download path remains `/ipfs/<cid>`.
 
 ## Security
 
@@ -242,9 +280,10 @@ kubectl delete namespace plv-fabric plv-main-campus plv-annex-campus plv-pubad-c
    - Test disaster recovery
 
 3. **Monitoring**
-   - Deploy Prometheus + Grafana; the repository currently provides configuration and alert rules, not those workloads
-   - Mount `../monitoring/prometheus.yaml` and `../monitoring/alert-rules.yaml`, then set `PROMETHEUS_URL` to the in-cluster Prometheus service
-   - Import `../monitoring/grafana-dashboard.json`
+   - Prometheus, Grafana, Loki, Grafana Alloy, kube-state-metrics, and postgres_exporter are deployed from `../monitoring/observability-stack.yaml`
+   - Prometheus configuration and alert rules are loaded from `../monitoring/prometheus.yaml` and `../monitoring/alert-rules.yaml`
+   - Grafana automatically provisions the overview, Kubernetes memory, API, Fabric, PostgreSQL, workflow, and Loki log dashboards
+   - Grafana is a private ClusterIP service and is exposed only through the backend-authorized System Admin portal proxy
    - Scrape gateway metrics from `middleware-api:4000/metrics` and discover the five internal middleware Services through pod annotations
    - Use kube-state-metrics and cAdvisor panels for frontend, client-app, gateway, auth, identity, ledger, upload, and settings deployment health
    - Use `/nginx-health`, `/api/backend/health`, `/api/health`, and `/api/ready` for runtime health checks

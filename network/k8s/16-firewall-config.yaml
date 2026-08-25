@@ -35,6 +35,13 @@ spec:
     - protocol: TCP
       port: 5432
   - from:
+    - podSelector:
+        matchLabels:
+          app: postgres-exporter
+    ports:
+    - protocol: TCP
+      port: 5432
+  - from:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: plv-annex-campus

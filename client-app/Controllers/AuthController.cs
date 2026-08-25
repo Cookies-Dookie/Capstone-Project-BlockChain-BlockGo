@@ -289,8 +289,10 @@ namespace Client_app.Controllers
                 ORDER BY published_at DESC NULLS LAST, curriculum_id DESC
                 LIMIT 1;", connection, transaction);
             command.Parameters.AddWithValue("programId", programId);
-            command.Parameters.AddWithValue("curriculumId", (object?)curriculumId ?? DBNull.Value);
-            command.Parameters.AddWithValue("version", hasRequestedVersion ? (object)curriculumVersion!.Trim() : DBNull.Value);
+            command.Parameters.Add("curriculumId", NpgsqlTypes.NpgsqlDbType.Bigint).Value =
+                (object?)curriculumId ?? DBNull.Value;
+            command.Parameters.Add("version", NpgsqlTypes.NpgsqlDbType.Text).Value =
+                hasRequestedVersion ? curriculumVersion!.Trim() : DBNull.Value;
             var result = await command.ExecuteScalarAsync(cancellationToken);
             if (result is null && (curriculumId.HasValue || hasRequestedVersion))
                 throw new ArgumentException("The selected curriculum is not published or does not belong to the academic program.");

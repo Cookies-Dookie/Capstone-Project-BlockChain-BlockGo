@@ -174,11 +174,12 @@ const passwordResetLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, stand
 app.post('/api/forgot-password', passwordResetLimiter, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'Email is required.' });
-    const result = await dbRead.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [email]);
-    if (!result.rows.length) return res.json({ message: 'If that email exists, a reset link has been sent.' });
-    const token = crypto.randomBytes(32).toString('hex');
-    await dbWrite.query('UPDATE users SET password_reset_token = $1, password_reset_expires = $2 WHERE id = $3', [token, Date.now() + 3600000, result.rows[0].id]);
-    const resetUrl = `${process.env.FRONTEND_URL || corsOrigins()[0] || 'http://localhost'}/reset-password?token=${token}`;
+    const result = await dbRead.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND is_active = TRUE AND LOWER(status) = \'approved\'', [email]);
+    if (!result.rows.length) return res.json({ message: 'If that email exists, a password reset OTP has been sent.' });
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+    await dbWrite.query('UPDATE password_reset_requests SET used_at = $1 WHERE LOWER(email) = LOWER($2) AND used_at IS NULL', [Date.now(), email]);
+    await dbWrite.query('INSERT INTO password_reset_requests (user_id, email, otp_code, expires_at) VALUES ($1, $2, $3, $4)', [result.rows[0].id, email, otp, expiresAt]);
     const transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST || process.env.EMAIL_HOST || 'smtp.gmail.com',
         port: Number(process.env.SMTP_PORT || process.env.EMAIL_PORT || 587), secure: false,
@@ -187,20 +188,22 @@ app.post('/api/forgot-password', passwordResetLimiter, async (req, res) => {
     await transporter.sendMail({
         from: process.env.EMAIL_FROM || '"PLV Registrar BLOCKGO" <noreply@capstone.com>', to: email,
         subject: 'Password Reset Request',
-        text: `You requested a password reset. Open this link: ${resetUrl}`,
-        html: `<p>You requested a password reset.</p><p><a href="${resetUrl}">Reset password</a></p>`
+        text: `Your PLV BlockGO password reset OTP is ${otp}. It expires in 10 minutes.`,
+        html: `<p>Your PLV BlockGO password reset OTP is:</p><p style="font-size: 28px; font-weight: bold; letter-spacing: 6px;">${otp}</p><p>This code expires in 10 minutes.</p>`
     });
-    res.json({ message: 'If that email exists, a reset link has been sent.' });
+    res.json({ message: 'If that email exists, a password reset OTP has been sent.' });
 });
 
 app.post('/api/reset-password', async (req, res) => {
-    const { token, newPassword } = req.body || {};
-    if (typeof token !== 'string' || !token || typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 128) {
-        return res.status(400).json({ error: 'A valid reset token and a password between 8 and 128 characters are required.' });
+    const { email, otp, newPassword } = req.body || {};
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail || !/^\d{6}$/.test(String(otp || '')) || typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 128) {
+        return res.status(400).json({ error: 'Email, a valid six-digit OTP, and a password between 8 and 128 characters are required.' });
     }
-    const result = await dbRead.query('SELECT id FROM users WHERE password_reset_token = $1 AND password_reset_expires > $2', [token, Date.now()]);
-    if (!result.rows.length) return res.status(400).json({ error: 'Invalid or expired token' });
-    await dbWrite.query('UPDATE users SET password_hash = $1, password_reset_token = NULL, password_reset_expires = NULL WHERE id = $2', [await bcrypt.hash(newPassword, 10), result.rows[0].id]);
+    const result = await dbRead.query('SELECT request_id, user_id FROM password_reset_requests WHERE LOWER(email) = LOWER($1) AND otp_code = $2 AND expires_at > $3 AND used_at IS NULL ORDER BY created_at DESC LIMIT 1', [normalizedEmail, String(otp), Date.now()]);
+    if (!result.rows.length) return res.status(400).json({ error: 'Invalid or expired OTP.' });
+    await dbWrite.query('UPDATE users SET password_hash = $1, password_reset_token = NULL, password_reset_expires = NULL WHERE id = $2', [await bcrypt.hash(newPassword, 10), result.rows[0].user_id]);
+    await dbWrite.query('UPDATE password_reset_requests SET used_at = $1 WHERE request_id = $2', [Date.now(), result.rows[0].request_id]);
     res.json({ message: 'Password updated successfully. You can now log in.' });
 });
 

@@ -9,6 +9,7 @@ using BlockGo.Models;
 using BlockGo.Services;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Globalization;
 using Npgsql;
 
 namespace Client_app.Controllers
@@ -21,11 +22,13 @@ namespace Client_app.Controllers
         private readonly RegistrarDbContext _context;
         private readonly IBlockchainService _blockchain;
         private readonly string _connectionString;
+        private readonly ILogger<StudentController> _logger;
 
-        public StudentController(RegistrarDbContext context, IBlockchainService blockchain, IConfiguration configuration)
+        public StudentController(RegistrarDbContext context, IBlockchainService blockchain, IConfiguration configuration, ILogger<StudentController> logger)
         {
             _context = context;
             _blockchain = blockchain;
+            _logger = logger;
             _connectionString = configuration.GetConnectionString("MasterConnection")
                 ?? configuration.GetConnectionString("PostgresConnection")
                 ?? throw new InvalidOperationException("A PostgreSQL connection is required.");
@@ -115,67 +118,85 @@ namespace Client_app.Controllers
             var email = User.Identity?.Name;
             if (string.IsNullOrWhiteSpace(email)) return Unauthorized();
 
-            var responseJson = await _blockchain.GetAllGradesAsync(email);
-            using var responseDocument = JsonDocument.Parse(responseJson);
-            var data = responseDocument.RootElement.TryGetProperty("data", out var dataElement)
-                ? dataElement
-                : responseDocument.RootElement;
-            var records = JsonSerializer.Deserialize<List<AcademicRecord>>(
-                data.GetRawText(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new List<AcademicRecord>();
-
-            records = records.Where(record =>
-                string.Equals(record.StudentHash, email, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(record.Status, "Finalized", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            var facultyNames = await LoadFacultyNamesAsync(records.Select(record => record.FacultyId), cancellationToken);
-            var subjectMetadata = await LoadSubjectMetadataAsync(email, cancellationToken);
-            var grades = new List<object>();
-            foreach (var record in records)
+            try
             {
-                var yearLevel = ParseYearLevel(record.YearLevel, record.Section);
-                var subjectTitle = !string.IsNullOrWhiteSpace(record.SubjectTitle)
-                    ? record.SubjectTitle
-                    : subjectMetadata.TryGetValue(record.SubjectCode, out var subject) ? subject.Title : record.SubjectCode;
-                var units = record.Units > 0
-                    ? record.Units
-                    : subjectMetadata.TryGetValue(record.SubjectCode, out subject) ? subject.Units : 0;
-                var professor = !string.IsNullOrWhiteSpace(record.ProfessorName)
-                    ? record.ProfessorName
-                    : facultyNames.TryGetValue(record.FacultyId, out var name) ? name : record.FacultyId;
-                var terms = ParseGradeTerms(record.Grade, record.Term);
+                var responseJson = await _blockchain.GetAllGradesAsync(email);
+                using var responseDocument = JsonDocument.Parse(responseJson);
+                var data = responseDocument.RootElement.TryGetProperty("data", out var dataElement)
+                    ? dataElement
+                    : responseDocument.RootElement;
+                var records = JsonSerializer.Deserialize<List<AcademicRecord>>(
+                    data.GetRawText(),
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new List<AcademicRecord>();
 
-                foreach (var term in terms)
+                records = records.Where(record =>
+                    string.Equals(record.StudentHash, email, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(record.Status, "Finalized", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                var facultyNames = await LoadFacultyNamesAsync(records.Select(record => record.FacultyId), cancellationToken);
+                var subjectMetadata = await LoadSubjectMetadataAsync(email, cancellationToken);
+                var grades = new List<object>();
+                foreach (var record in records)
                 {
-                    grades.Add(new
-                    {
-                        recordId = record.Id,
-                        studentId = string.IsNullOrWhiteSpace(record.StudentId) ? record.StudentNo : record.StudentId,
-                        subjectCode = record.SubjectCode,
-                        subjectTitle,
-                        professor,
-                        facultyId = record.FacultyId,
-                        units,
-                        yearLevel,
-                        semester = record.Semester,
-                        schoolYear = record.SchoolYear,
-                        term = term.Name,
-                        grade = term.Grade,
-                        finalAverage = term.FinalAverage,
-                        status = record.Status,
-                        transactionId = record.TransactionId,
-                        transactionHash = string.IsNullOrWhiteSpace(record.TransactionHash) ? record.TransactionId : record.TransactionHash,
-                        timestamp = record.Timestamp,
-                        date = record.Date
-                    });
-                }
-            }
+                    var yearLevel = ParseYearLevel(record.YearLevel, record.Section);
+                    var subjectTitle = !string.IsNullOrWhiteSpace(record.SubjectTitle)
+                        ? record.SubjectTitle
+                        : subjectMetadata.TryGetValue(record.SubjectCode, out var subject) ? subject.Title : record.SubjectCode;
+                    var units = record.Units > 0
+                        ? record.Units
+                        : subjectMetadata.TryGetValue(record.SubjectCode, out subject) ? subject.Units : 0;
+                    var professor = !string.IsNullOrWhiteSpace(record.ProfessorName)
+                        ? record.ProfessorName
+                        : facultyNames.TryGetValue(record.FacultyId, out var name) ? name : record.FacultyId;
+                    var terms = ParseGradeTerms(record.Grade, record.Term);
 
-            return Ok(new
+                    foreach (var term in terms)
+                    {
+                        grades.Add(new
+                        {
+                            recordId = record.Id,
+                            studentId = string.IsNullOrWhiteSpace(record.StudentId) ? record.StudentNo : record.StudentId,
+                            subjectCode = record.SubjectCode,
+                            subjectTitle,
+                            professor,
+                            facultyId = record.FacultyId,
+                            units,
+                            yearLevel,
+                            semester = record.Semester,
+                            schoolYear = record.SchoolYear,
+                            term = term.Name,
+                            grade = term.Grade,
+                            finalAverage = term.FinalAverage,
+                            status = record.Status,
+                            transactionId = record.TransactionId,
+                            transactionHash = string.IsNullOrWhiteSpace(record.TransactionHash) ? record.TransactionId : record.TransactionHash,
+                            timestamp = record.Timestamp,
+                            date = record.Date
+                        });
+                    }
+                }
+
+                var orderedGrades = grades.OrderBy(item => JsonSerializer.Serialize(item)).ToArray();
+                return Ok(new
+                {
+                    status = "Success",
+                    data = orderedGrades,
+                    message = orderedGrades.Length == 0 ? "There are currently no grade records available." : null
+                });
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                status = "Success",
-                data = grades.OrderBy(item => JsonSerializer.Serialize(item)).ToArray()
-            });
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(exception, "Blockchain grade retrieval failed for student {StudentEmail}", email);
+                return StatusCode(StatusCodes.Status502BadGateway, new
+                {
+                    status = "Error",
+                    message = "Unable to retrieve grade records from the blockchain. Please try again later."
+                });
+            }
         }
 
         [HttpGet("blockchain-transactions")]
@@ -218,7 +239,7 @@ namespace Client_app.Controllers
                         term = string.IsNullOrWhiteSpace(record.Term) ? InferTerm(record.Grade) : record.Term,
                         grade = GetDisplayGrade(record.Grade, record.Term),
                         status = record.Status,
-                        timestamp = GetJsonString(transaction, "timestamp", record.Timestamp)
+                        timestamp = NormalizeTransactionTimestamp(GetJsonString(transaction, "timestamp", record.Timestamp))
                     });
                 }
             }
@@ -302,6 +323,44 @@ namespace Client_app.Controllers
         }
 
         private static string InferTerm(string rawGrade) => ParseGradeTerms(rawGrade, "midterm").Any(value => value.Name == "finals") ? "finals" : "midterm";
+
+        private static string NormalizeTransactionTimestamp(string rawTimestamp)
+        {
+            if (string.IsNullOrWhiteSpace(rawTimestamp)) return "";
+
+            var fabricTimestamp = Regex.Match(
+                rawTimestamp,
+                @"^seconds:\s*(-?\d+)\s+nanos:\s*(\d+)\s*$",
+                RegexOptions.IgnoreCase);
+
+            if (fabricTimestamp.Success &&
+                long.TryParse(fabricTimestamp.Groups[1].Value, out var seconds) &&
+                long.TryParse(fabricTimestamp.Groups[2].Value, out var nanoseconds))
+            {
+                try
+                {
+                    return DateTimeOffset
+                        .FromUnixTimeSeconds(seconds)
+                        .AddTicks(nanoseconds / 100)
+                        .ToString("O", CultureInfo.InvariantCulture);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    return rawTimestamp;
+                }
+            }
+
+            if (DateTimeOffset.TryParse(
+                rawTimestamp,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsedTimestamp))
+            {
+                return parsedTimestamp.ToString("O", CultureInfo.InvariantCulture);
+            }
+
+            return rawTimestamp;
+        }
 
         private static int ParseYearLevel(string? value, string? section)
         {

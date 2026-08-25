@@ -5,10 +5,10 @@ using Client_app.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace Client_app.Controllers
 {
-    [ApiController]
     [Authorize]
     [Route("api/[controller]")]
     public sealed class CurriculumsController : ControllerBase
@@ -68,7 +68,8 @@ namespace Client_app.Controllers
                     ORDER BY c.updated_at DESC";
             await using (var command = new NpgsqlCommand(sql, connection))
             {
-                command.Parameters.AddWithValue("status", (object?)NormalizeOptionalStatus(status) ?? DBNull.Value);
+                var statusParameter = command.Parameters.Add("status", NpgsqlTypes.NpgsqlDbType.Varchar);
+                statusParameter.Value = (object?)NormalizeOptionalStatus(status) ?? DBNull.Value;
                 if (role != "registrar") command.Parameters.AddWithValue("actor", actor);
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken)) ids.Add(reader.GetInt64(0));

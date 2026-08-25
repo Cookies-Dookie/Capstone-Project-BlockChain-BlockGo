@@ -4,6 +4,7 @@
 # Usage:
 #   ./k8s/deploy-k8s.sh local apply
 #   ./k8s/deploy-k8s.sh production apply
+#   ./k8s/deploy-k8s.sh local verify
 #   ./k8s/deploy-k8s.sh production status
 #   ./k8s/deploy-k8s.sh local delete
 
@@ -14,15 +15,18 @@ cd "$(dirname "$0")/.."
 PROFILE="${K8S_PROFILE:-local}"
 ACTION="${1:-apply}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-20m}"
+PRODUCTION_IMAGE_REPOSITORY="${PRODUCTION_IMAGE_REPOSITORY:-}"
+PRODUCTION_IMAGE_TAG="${PRODUCTION_IMAGE_TAG:-}"
+LOCAL_IMAGE_TAG="${LOCAL_IMAGE_TAG:-blockgo-local-$(date -u +%Y%m%d%H%M%S)}"
 
 if [[ "${1:-}" == "local" || "${1:-}" == "production" ]]; then
     PROFILE="$1"
     ACTION="${2:-apply}"
 elif [[ "${2:-}" == "local" || "${2:-}" == "production" ]]; then
     PROFILE="$2"
-elif [[ "${1:-}" == "apply" || "${1:-}" == "delete" || "${1:-}" == "status" ]]; then
+elif [[ "${1:-}" == "apply" || "${1:-}" == "delete" || "${1:-}" == "status" || "${1:-}" == "verify" ]]; then
     ACTION="$1"
-elif [[ "${2:-}" == "apply" || "${2:-}" == "delete" || "${2:-}" == "status" ]]; then
+elif [[ "${2:-}" == "apply" || "${2:-}" == "delete" || "${2:-}" == "status" || "${2:-}" == "verify" ]]; then
     ACTION="$2"
 fi
 
@@ -35,9 +39,9 @@ case "$PROFILE" in
 esac
 
 case "$ACTION" in
-    apply|delete|status) ;;
+    apply|delete|status|verify) ;;
     *)
-        echo "Usage: $0 [local|production] [apply|delete|status]"
+        echo "Usage: $0 [local|production] [apply|delete|status|verify]"
         exit 1
         ;;
 esac
@@ -116,6 +120,59 @@ apply_manifest_if_exists() {
     else
         echo "Manifest $manifest not found. Skipping."
     fi
+}
+
+deploy_observability() {
+    local monitoring_dir="../monitoring"
+    if [[ ! -f "$monitoring_dir/observability-stack.yaml" ]]; then
+        echo "ERROR: Observability stack manifest not found."
+        exit 1
+    fi
+
+    if ! kubectl get secret grafana-admin -n plv-fabric >/dev/null 2>&1; then
+        if ! command -v openssl >/dev/null 2>&1; then
+            echo "ERROR: openssl is required to generate the initial Grafana admin secret."
+            exit 1
+        fi
+        local grafana_password
+        grafana_password="$(openssl rand -hex 24)"
+        kubectl create secret generic grafana-admin -n plv-fabric \
+            --from-literal=admin-user=admin \
+            --from-literal=admin-password="$grafana_password" >/dev/null
+        unset grafana_password
+        echo "Created the Grafana admin secret. Grafana remains accessible only through the System Admin proxy."
+    fi
+
+    kubectl create configmap prometheus-config -n plv-fabric \
+        --from-file=prometheus.yml="$monitoring_dir/prometheus.yaml" \
+        --from-file=alert-rules.yml="$monitoring_dir/alert-rules.yaml" \
+        --dry-run=client -o yaml | kubectl apply -f -
+
+    kubectl create configmap grafana-dashboards -n plv-fabric \
+        --from-file="$monitoring_dir/grafana-dashboard.json" \
+        --from-file="$monitoring_dir/grafana-kubernetes-memory.json" \
+        --from-file="$monitoring_dir/grafana-api-observability.json" \
+        --from-file="$monitoring_dir/grafana-fabric.json" \
+        --from-file="$monitoring_dir/grafana-postgresql.json" \
+        --from-file="$monitoring_dir/grafana-workflows.json" \
+        --from-file="$monitoring_dir/grafana-logs.json" \
+        --dry-run=client -o yaml | kubectl apply -f -
+
+    kubectl apply -f "$monitoring_dir/observability-stack.yaml"
+}
+
+configure_local_observability_resources() {
+    if [[ "$PROFILE" != "local" ]]; then
+        return
+    fi
+    echo "Applying low scheduler requests for the single-node local observability stack..."
+    local deployment
+    for deployment in prometheus kube-state-metrics loki alloy grafana; do
+        kubectl set resources deployment/$deployment -n plv-fabric \
+            --requests=cpu=10m,memory=16Mi >/dev/null
+    done
+    kubectl set resources deployment/postgres-exporter -n plv-main-campus \
+        --requests=cpu=10m,memory=16Mi >/dev/null
 }
 
 local_pv_root() {
@@ -473,9 +530,11 @@ EOF
     fi
 
     tr -d '\r' < ./swarm.key > ./swarm-clean.key
-    kubectl create configmap ipfs-swarm-key \
-        --from-file=swarm.key=./swarm-clean.key \
-        -n plv-fabric --dry-run=client -o yaml | kubectl apply -f -
+    for ns in plv-fabric plv-annex-campus plv-pubad-campus; do
+        kubectl create configmap ipfs-swarm-key \
+            --from-file=swarm.key=./swarm-clean.key \
+            -n "$ns" --dry-run=client -o yaml | kubectl apply -f -
+    done
     rm -f ./swarm-clean.key
 
     local env_file="./.env"
@@ -564,13 +623,23 @@ prepare_manifests() {
     cp ./k8s/*.yaml "$TMP_K8S_DIR/"
 
     if [[ "$PROFILE" == "local" ]]; then
-        echo "Preparing local manifests with local image names and smaller storage."
+        echo "Preparing local manifests with immutable source image tag ${LOCAL_IMAGE_TAG} and smaller storage."
         cp ./k8s/01b-persistent-volumes.local-kind.yaml.example "$TMP_K8S_DIR/01b-persistent-volumes.local-kind.yaml"
         local pv_root
         pv_root="$(local_pv_root)"
         echo "Local PV hostPath root: $pv_root"
         sed -i "s|\${PWD}|$pv_root|g" "$TMP_K8S_DIR/01b-persistent-volumes.local-kind.yaml"
         sed -i "s|registry.example.com/plv-repo/||g" "$TMP_K8S_DIR"/*.yaml
+        local image_name
+        for image_name in \
+            fabric-middleware \
+            client-app \
+            frontend \
+            registrar-chaincode \
+            faculty-chaincode \
+            department-chaincode; do
+            sed -i "s|${image_name}:latest|${image_name}:${LOCAL_IMAGE_TAG}|g" "$TMP_K8S_DIR"/*.yaml
+        done
         sed -i 's/imagePullPolicy: Always/imagePullPolicy: Never/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/value: file/value: none/g' "$TMP_K8S_DIR"/06-orderer*.yaml
         sed -i '/- name: ORDERER_ADMIN_TLS_ENABLED/{n;s/value: "true"/value: "false"/;}' "$TMP_K8S_DIR"/06-orderer*.yaml
@@ -582,7 +651,24 @@ prepare_manifests() {
         sed -i 's/FABRIC_CA_INSECURE_TLS: "false"/FABRIC_CA_INSECURE_TLS: "true"/' "$TMP_K8S_DIR/08-middleware-api.yaml"
         sed -i '/- name: IPFS_RUN_AS_ROOT/{n;s/value: "false"/value: "true"/;}' "$TMP_K8S_DIR/09-ipfs.yaml"
     else
-        echo "Preparing production manifests without local image or storage rewrites."
+        echo "Preparing production manifests with the source-built image revision ${PRODUCTION_IMAGE_TAG}."
+        local image_name
+        for image_name in \
+            fabric-middleware \
+            client-app \
+            frontend \
+            registrar-chaincode \
+            faculty-chaincode \
+            department-chaincode; do
+            sed -i \
+                "s|registry.example.com/plv-repo/${image_name}:latest|${PRODUCTION_IMAGE_REPOSITORY%/}/${image_name}:${PRODUCTION_IMAGE_TAG}|g" \
+                "$TMP_K8S_DIR"/*.yaml
+        done
+
+        if grep -R -q 'registry.example.com/plv-repo/' "$TMP_K8S_DIR"; then
+            echo "ERROR: Placeholder production image references remain after manifest preparation."
+            return 1
+        fi
     fi
 }
 
@@ -593,12 +679,13 @@ prepare_local_middleware_image() {
 
     echo "Building the local middleware microservices image (Docker cache enabled)..."
     docker build \
+        -t "fabric-middleware:${LOCAL_IMAGE_TAG}" \
         -t fabric-middleware:latest \
         -f ../middleware/Dockerfile \
         ../middleware
 
     echo "Validating middleware microservice entrypoints..."
-    docker run --rm --entrypoint node fabric-middleware:latest -e '
+    docker run --rm --entrypoint node "fabric-middleware:${LOCAL_IMAGE_TAG}" -e '
         const scripts = require("/app/package.json").scripts || {};
         const required = ["start:gateway", "start:auth", "start:identity", "start:ledger", "start:upload", "start:settings"];
         const missing = required.filter((name) => !scripts[name]);
@@ -608,6 +695,234 @@ prepare_local_middleware_image() {
         }
         console.log("All middleware microservice entrypoints are present.");
     '
+}
+
+verify_required_application_fixes() {
+    echo "Verifying required application fixes are present in the deployment source..."
+
+    grep -q 'if (g >= 84) return "2.00"' ../frontend/src/utils/gradingHelpers.js || {
+        echo "ERROR: The college grade-equivalent scale is missing from the frontend source."
+        return 1
+    }
+    grep -q '>Grade</th><th className="px-4 py-3">Equivalent</th>' ../frontend/src/components/student/StudentHistoricalGrades.jsx || {
+        echo "ERROR: The distinct Grade and Equivalent columns are missing from the student grade view."
+        return 1
+    }
+    grep -q 'displayTransactionDate' ../frontend/src/components/student/StudentBlockchainTransactions.jsx || {
+        echo "ERROR: The defensive transaction-date formatter is missing from the frontend source."
+        return 1
+    }
+    grep -q 'NormalizeTransactionTimestamp' ../client-app/Controllers/StudentController.cs || {
+        echo "ERROR: Fabric timestamp normalization is missing from the client-app source."
+        return 1
+    }
+    grep -q 'if (rawAverage >= 84) return 2.00' ../client-app/Controllers/GradeController.cs || {
+        echo "ERROR: The college grade-equivalent scale is missing from the client-app source."
+        return 1
+    }
+    grep -q 'time.Unix(entry.Timestamp.Seconds' ../chaincode/main.go || {
+        echo "ERROR: ISO transaction timestamps are missing from the chaincode source."
+        return 1
+    }
+    grep -q 'ResetPasswordAsync(int userId' ../client-app/Services/IAccountProvisioningService.cs || {
+        echo "ERROR: Role-limited manual password reset is missing from the client-app source."
+        return 1
+    }
+    grep -q '"registrar" => target.Role is "student" or "faculty" or "department_admin"' ../client-app/Services/AccountProvisioningService.cs || {
+        echo "ERROR: The Registrar password-reset role boundary is missing."
+        return 1
+    }
+    grep -q '"system_admin" => target.Role == "registrar"' ../client-app/Services/AccountProvisioningService.cs || {
+        echo "ERROR: The System Administrator password-reset role boundary is missing."
+        return 1
+    }
+    grep -q 'HttpPost("registrar-correct/{recordId}")' ../client-app/Controllers/GradeController.cs || {
+        echo "ERROR: The Registrar finalized-grade correction endpoint is missing."
+        return 1
+    }
+    grep -q 'Commit Corrected Grade' ../frontend/src/components/registrar/RegistrarGradesView.jsx || {
+        echo "ERROR: The Registrar grade-correction frontend control is missing."
+        return 1
+    }
+    grep -q 'Password Management' ../frontend/src/components/registrar/RegistrarGradesView.jsx || {
+        echo "ERROR: The Registrar password-management frontend control is missing."
+        return 1
+    }
+
+    grep -q 'const ActionReason' ../frontend/src/components/registrar/SystemLogs.jsx || {
+        echo "ERROR: Human-readable Registrar activity-log rendering is missing."
+        return 1
+    }
+    grep -q 'backToConversationList' ../frontend/src/components/shared/Chat.jsx || {
+        echo "ERROR: The chat Back navigation control is missing."
+        return 1
+    }
+    grep -q 'Permanently delete every message' ../frontend/src/components/shared/Chat.jsx || {
+        echo "ERROR: Permanent direct-message deletion is missing from the chat frontend."
+        return 1
+    }
+    grep -q 'Group invitations' ../frontend/src/components/shared/Chat.jsx || {
+        echo "ERROR: Group invitation controls are missing from the chat frontend."
+        return 1
+    }
+    grep -q 'CreateGroupChat' ../client-app/Controllers/ChatHub.cs || {
+        echo "ERROR: Group-chat creation is missing from the chat hub."
+        return 1
+    }
+    grep -q 'RespondToGroupInvitation' ../client-app/Controllers/ChatHub.cs || {
+        echo "ERROR: Group invitation acceptance and decline are missing from the chat hub."
+        return 1
+    }
+    grep -q 'TimeSpan.FromDays(30)' ../client-app/Controllers/ChatHub.cs || {
+        echo "ERROR: The required 30-day chat history window is missing."
+        return 1
+    }
+    grep -q 'DeleteHistoryAsync' ../client-app/Services/ChatCache.cs || {
+        echo "ERROR: Permanent chat-cache deletion is missing."
+        return 1
+    }
+    grep -q 'chat_conversation_states' ../migrations/006_chat_conversation_states.sql || {
+        echo "ERROR: Migration 006 for chat conversation state is missing or invalid."
+        return 1
+    }
+    grep -q 'chat_group_messages' ../migrations/007_group_chats.sql || {
+        echo "ERROR: Migration 007 for group chats is missing or invalid."
+        return 1
+    }
+
+    echo "Required grade, timestamp, password-reset, Registrar, and chat fixes are present."
+}
+
+prepare_local_application_images() {
+    if [[ "$PROFILE" != "local" ]]; then
+        return
+    fi
+
+    echo "Building the local client-app image from the current source..."
+    docker build \
+        -t "client-app:${LOCAL_IMAGE_TAG}" \
+        -t client-app:latest \
+        -f ../client-app/Dockerfile \
+        ../client-app
+
+    echo "Building the local frontend image from the current source..."
+    docker build \
+        -t "frontend:${LOCAL_IMAGE_TAG}" \
+        -t frontend:latest \
+        -f ../frontend/Dockerfile \
+        ../frontend
+}
+
+validate_production_image_settings() {
+    if [[ "$PROFILE" != "production" ]]; then
+        return
+    fi
+
+    if [[ -z "$PRODUCTION_IMAGE_REPOSITORY" || "$PRODUCTION_IMAGE_REPOSITORY" == "registry.example.com/plv-repo" ]]; then
+        echo "ERROR: Set PRODUCTION_IMAGE_REPOSITORY to the writable container repository used by the cluster."
+        return 1
+    fi
+    if [[ -z "$PRODUCTION_IMAGE_TAG" || "$PRODUCTION_IMAGE_TAG" == "latest" ]]; then
+        echo "ERROR: Set PRODUCTION_IMAGE_TAG to an immutable revision such as a release number or commit SHA; 'latest' is refused."
+        return 1
+    fi
+    if [[ ! "$PRODUCTION_IMAGE_REPOSITORY" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
+        echo "ERROR: PRODUCTION_IMAGE_REPOSITORY contains unsupported characters."
+        return 1
+    fi
+    if [[ ! "$PRODUCTION_IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "ERROR: PRODUCTION_IMAGE_TAG contains unsupported characters."
+        return 1
+    fi
+}
+
+prepare_production_source_images() {
+    if [[ "$PROFILE" != "production" ]]; then
+        return
+    fi
+
+    validate_production_image_settings
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+        echo "ERROR: Docker is required to build and publish production images."
+        return 1
+    fi
+
+    local repository="${PRODUCTION_IMAGE_REPOSITORY%/}"
+    local tag="$PRODUCTION_IMAGE_TAG"
+    echo "Building production application images from the current workspace at ${repository}/*:${tag}..."
+
+    docker build -t "${repository}/fabric-middleware:${tag}" -f ../middleware/Dockerfile ../middleware
+    docker build -t "${repository}/client-app:${tag}" -f ../client-app/Dockerfile ../client-app
+    docker build -t "${repository}/frontend:${tag}" -f ../frontend/Dockerfile ../frontend
+    docker build -t "${repository}/registrar-chaincode:${tag}" -f ../chaincode/Dockerfile ../chaincode
+    docker image tag "${repository}/registrar-chaincode:${tag}" "${repository}/faculty-chaincode:${tag}"
+    docker image tag "${repository}/registrar-chaincode:${tag}" "${repository}/department-chaincode:${tag}"
+
+    local image_name
+    for image_name in \
+        fabric-middleware \
+        client-app \
+        frontend \
+        registrar-chaincode \
+        faculty-chaincode \
+        department-chaincode; do
+        echo "Publishing ${repository}/${image_name}:${tag}..."
+        docker push "${repository}/${image_name}:${tag}"
+    done
+}
+
+verify_deployment_inputs() {
+    verify_required_application_fixes
+    validate_production_image_settings
+    prepare_manifests
+
+    local image_repository=""
+    local image_tag="$LOCAL_IMAGE_TAG"
+    if [[ "$PROFILE" == "production" ]]; then
+        image_repository="${PRODUCTION_IMAGE_REPOSITORY%/}/"
+        image_tag="$PRODUCTION_IMAGE_TAG"
+    fi
+
+    local image_name
+    local expected_image
+    for image_name in \
+        fabric-middleware \
+        client-app \
+        frontend \
+        registrar-chaincode \
+        faculty-chaincode \
+        department-chaincode; do
+        expected_image="${image_repository}${image_name}:${image_tag}"
+        if ! grep -R -F -q "image: ${expected_image}" "$TMP_K8S_DIR"; then
+            echo "ERROR: Prepared manifests do not reference ${expected_image}."
+            return 1
+        fi
+    done
+
+    local required_file
+    for required_file in \
+        ../migrations/006_chat_conversation_states.sql \
+        ../migrations/007_group_chats.sql \
+        ../monitoring/grafana-dashboard.json \
+        ../monitoring/grafana-kubernetes-memory.json \
+        ../monitoring/grafana-api-observability.json \
+        ../monitoring/grafana-fabric.json \
+        ../monitoring/grafana-postgresql.json \
+        ../monitoring/grafana-workflows.json \
+        ../monitoring/grafana-logs.json \
+        ../monitoring/observability-stack.yaml; do
+        if [[ ! -s "$required_file" ]]; then
+            echo "ERROR: Required deployment artifact ${required_file} is missing or empty."
+            return 1
+        fi
+    done
+
+    if ! grep -q 'postgres-runtime-migrations' ./k8s/04a-postgres-configmap.yaml; then
+        echo "ERROR: The PostgreSQL migration Job is not wired to the generated migration ConfigMap."
+        return 1
+    fi
+
+    echo "Deployment inputs verified for ${PROFILE}; no cluster resources were changed."
 }
 
 configure_local_application_rollouts() {
@@ -626,6 +941,7 @@ configure_local_application_rollouts() {
         settings-service
         client-app
         frontend
+        ipfs-ha-router
     )
 
     for deployment in "${deployments[@]}"; do
@@ -783,59 +1099,25 @@ configure_peer_channel_endpoint_aliases() {
             return
         fi
 
-        local fallback_image=""
-        local candidate
-        local index
-        local source_image
-        local target
-        local targets=(
-            registrar-chaincode:latest
-            faculty-chaincode:latest
-            department-chaincode:latest
-        )
-        local candidates=(
-            network-registrar-chaincode:latest
-            network-faculty-chaincode:latest
-            network-department-chaincode:latest
-        )
-
-        for index in "${!targets[@]}"; do
-            target="${targets[$index]}"
-            candidate="${candidates[$index]}"
-
-            if docker image inspect "$target" >/dev/null 2>&1; then
-                if [[ -z "$fallback_image" ]]; then
-                    fallback_image="$target"
-                fi
-                continue
-            fi
-
-            if docker image inspect "$candidate" >/dev/null 2>&1; then
-                source_image="$candidate"
-            elif [[ -n "$fallback_image" ]]; then
-                source_image="$fallback_image"
-            else
-                echo "Building the local chaincode image..."
-                docker build \
-                    -t "$target" \
-                    -f ../chaincode/Dockerfile \
-                    ../chaincode
-                fallback_image="$target"
-                continue
-            fi
-
-            echo "Creating local image tag $target from $source_image"
-            docker image tag "$source_image" "$target"
-            if [[ -z "$fallback_image" ]]; then
-                fallback_image="$target"
-            fi
-        done
+        echo "Building the local chaincode image from the current source..."
+        docker build \
+            -t "registrar-chaincode:${LOCAL_IMAGE_TAG}" \
+            -t registrar-chaincode:latest \
+            -f ../chaincode/Dockerfile \
+            ../chaincode
+        docker image tag "registrar-chaincode:${LOCAL_IMAGE_TAG}" "faculty-chaincode:${LOCAL_IMAGE_TAG}"
+        docker image tag "registrar-chaincode:${LOCAL_IMAGE_TAG}" "department-chaincode:${LOCAL_IMAGE_TAG}"
+        docker image tag "registrar-chaincode:${LOCAL_IMAGE_TAG}" faculty-chaincode:latest
+        docker image tag "registrar-chaincode:${LOCAL_IMAGE_TAG}" department-chaincode:latest
     }
 
     deploy_manifests() {
     echo "Deploying K8s manifests..."
+    verify_required_application_fixes
     prepare_local_middleware_image
+    prepare_local_application_images
     prepare_local_chaincode_images
+    prepare_production_source_images
     prepare_manifests
 
     apply_manifest "$TMP_K8S_DIR/00-namespace.yaml"
@@ -873,6 +1155,27 @@ configure_peer_channel_endpoint_aliases() {
     configure_peer_channel_endpoint_aliases
     apply_manifest "$TMP_K8S_DIR/08-middleware-api.yaml"
     apply_manifest "$TMP_K8S_DIR/09-ipfs.yaml"
+    wait_rollout statefulset/ipfs-node plv-fabric
+    wait_rollout statefulset/ipfs-annex plv-annex-campus
+    wait_rollout statefulset/ipfs-pubad plv-pubad-campus
+    wait_rollout deployment/ipfs-ha-router plv-fabric
+    kubectl delete job ipfs-cluster-bootstrap -n plv-fabric --ignore-not-found --wait=true >/dev/null
+    apply_manifest "$TMP_K8S_DIR/09b-ipfs-cluster-bootstrap.yaml"
+    if ! wait_for_job_completion ipfs-cluster-bootstrap plv-fabric 420; then
+        echo "ERROR: IPFS private cluster bootstrap or pin replication failed."
+        show_job_diagnostics ipfs-cluster-bootstrap plv-fabric
+        return 1
+    fi
+    show_job_logs ipfs-cluster-bootstrap plv-fabric
+    kubectl delete job ipfs-webui-bootstrap -n plv-fabric --ignore-not-found --wait=true >/dev/null
+    apply_manifest "$TMP_K8S_DIR/09a-ipfs-webui-bootstrap.yaml"
+    if ! wait_for_job_completion ipfs-webui-bootstrap plv-fabric 420; then
+        echo "ERROR: IPFS Web UI bootstrap failed."
+        show_job_diagnostics ipfs-webui-bootstrap plv-fabric
+        return 1
+    fi
+    show_job_logs ipfs-webui-bootstrap plv-fabric
+    apply_manifest "$TMP_K8S_DIR/09c-ipfs-pin-reconciler.yaml"
     apply_manifest "$TMP_K8S_DIR/10-ingress-network-policy.yaml"
     apply_manifest "$TMP_K8S_DIR/12a-redis.yaml"
     apply_manifest "$TMP_K8S_DIR/14-client-app.yaml"
@@ -895,12 +1198,20 @@ configure_peer_channel_endpoint_aliases() {
         echo "Skipping production-only autoscaling, ingress, backup, quota, and firewall manifests for local profile."
     fi
 
+    deploy_observability
+    configure_local_observability_resources
+
     configure_local_application_rollouts
 
     echo "Restarting Fabric peers sequentially to reload refreshed crypto Secrets..."
     restart_deployment_and_wait peer-registrar plv-main-campus
     restart_deployment_and_wait peer-faculty plv-annex-campus
     restart_deployment_and_wait peer-department plv-pubad-campus
+
+    echo "Restarting chaincode deployments sequentially to load the images built from current source..."
+    restart_deployment_and_wait registrar-chaincode plv-main-campus
+    restart_deployment_and_wait faculty-chaincode plv-annex-campus
+    restart_deployment_and_wait department-chaincode plv-pubad-campus
 
     echo "Restarting application deployments sequentially..."
     restart_deployment_and_wait auth-service plv-fabric
@@ -933,6 +1244,9 @@ wait_deployments() {
     wait_rollout deployment/peer-faculty plv-annex-campus
     wait_rollout deployment/peer-department plv-pubad-campus
     wait_rollout statefulset/ipfs-node plv-fabric
+    wait_rollout statefulset/ipfs-annex plv-annex-campus
+    wait_rollout statefulset/ipfs-pubad plv-pubad-campus
+    wait_rollout deployment/ipfs-ha-router plv-fabric
     wait_rollout deployment/auth-service plv-fabric
     wait_rollout deployment/fabric-identity-service plv-fabric
     wait_rollout deployment/ledger-service plv-fabric
@@ -941,6 +1255,12 @@ wait_deployments() {
     wait_rollout deployment/middleware-api plv-fabric
     wait_rollout deployment/client-app plv-fabric
     wait_rollout deployment/frontend plv-fabric
+    wait_rollout deployment/prometheus plv-fabric
+    wait_rollout deployment/kube-state-metrics plv-fabric
+    wait_rollout deployment/loki plv-fabric
+    wait_rollout deployment/alloy plv-fabric
+    wait_rollout deployment/grafana plv-fabric
+    wait_rollout deployment/postgres-exporter plv-main-campus
 
     if [[ "$PROFILE" == "production" ]]; then
         wait_rollout statefulset/postgres-replica-annex plv-annex-campus
@@ -950,13 +1270,96 @@ wait_deployments() {
     echo "All requested rollouts are ready."
 }
 
+verify_deployed_application_revision() {
+    echo "Verifying the deployed application revision and required chat migrations..."
+
+    local migration_config
+    migration_config="$(kubectl get configmap postgres-runtime-migrations -n plv-main-campus -o json)"
+    grep -q '006_chat_conversation_states.sql' <<< "$migration_config" || {
+        echo "ERROR: Migration 006 is absent from the deployed migration ConfigMap."
+        return 1
+    }
+    grep -q '007_group_chats.sql' <<< "$migration_config" || {
+        echo "ERROR: Migration 007 is absent from the deployed migration ConfigMap."
+        return 1
+    }
+
+    local migration_logs
+    migration_logs="$(kubectl logs job/postgres-schema-migrations -n plv-main-campus --all-containers=true)"
+    grep -q 'Applying 006_chat_conversation_states.sql' <<< "$migration_logs" || {
+        echo "ERROR: Migration 006 was not observed in the completed migration Job."
+        return 1
+    }
+    grep -q 'Applying 007_group_chats.sql' <<< "$migration_logs" || {
+        echo "ERROR: Migration 007 was not observed in the completed migration Job."
+        return 1
+    }
+
+    local image_repository=""
+    local image_tag=""
+    if [[ "$PROFILE" == "local" ]]; then
+        image_tag="$LOCAL_IMAGE_TAG"
+    else
+        image_repository="${PRODUCTION_IMAGE_REPOSITORY%/}/"
+        image_tag="$PRODUCTION_IMAGE_TAG"
+    fi
+
+    local deployment_entry
+    local deployment
+    local namespace
+    local image_name
+    local expected_image
+    local deployed_image
+    for deployment_entry in \
+        "middleware-api|plv-fabric|fabric-middleware" \
+        "auth-service|plv-fabric|fabric-middleware" \
+        "fabric-identity-service|plv-fabric|fabric-middleware" \
+        "ledger-service|plv-fabric|fabric-middleware" \
+        "grade-upload-service|plv-fabric|fabric-middleware" \
+        "settings-service|plv-fabric|fabric-middleware" \
+        "client-app|plv-fabric|client-app" \
+        "frontend|plv-fabric|frontend" \
+        "registrar-chaincode|plv-main-campus|registrar-chaincode" \
+        "faculty-chaincode|plv-annex-campus|faculty-chaincode" \
+        "department-chaincode|plv-pubad-campus|department-chaincode"; do
+        IFS='|' read -r deployment namespace image_name <<< "$deployment_entry"
+        expected_image="${image_repository}${image_name}:${image_tag}"
+        deployed_image="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+        if [[ "$deployed_image" != "$expected_image" ]]; then
+            echo "ERROR: ${namespace}/${deployment} uses ${deployed_image}, expected ${expected_image}."
+            return 1
+        fi
+    done
+
+    local frontend_pod
+    frontend_pod="$(kubectl get pods -n plv-fabric -l app=frontend -o jsonpath='{.items[0].metadata.name}')"
+    if [[ -z "$frontend_pod" ]]; then
+        echo "ERROR: No frontend pod is available for deployed-bundle verification."
+        return 1
+    fi
+    kubectl exec "$frontend_pod" -n plv-fabric -- sh -ec \
+        "grep -R -q 'Group invitations' /usr/share/nginx/html/static/js && grep -R -q 'Permanently delete every message' /usr/share/nginx/html/static/js" || {
+        echo "ERROR: The deployed frontend bundle does not contain the required chat features."
+        return 1
+    }
+
+    echo "All custom deployments, the frontend bundle, and chat migrations match this source revision."
+}
+
 bootstrap_application_accounts() {
     local job_name="blockgo-app-bootstrap"
+    local bootstrap_memory_request="128Mi"
+    local bootstrap_memory_limit="192Mi"
+
+    if [[ "$PROFILE" == "local" ]]; then
+        bootstrap_memory_request="16Mi"
+        bootstrap_memory_limit="64Mi"
+    fi
 
     echo "Bootstrapping application administrator accounts..."
     kubectl delete job "$job_name" -n plv-fabric --ignore-not-found --wait=true >/dev/null
 
-    cat <<'EOF' | kubectl apply -f - >/dev/null
+    cat <<EOF | kubectl apply -f - >/dev/null
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -966,7 +1369,7 @@ metadata:
     app: blockgo-app-bootstrap
 spec:
   backoffLimit: 2
-  activeDeadlineSeconds: 180
+  activeDeadlineSeconds: 300
   template:
     metadata:
       labels:
@@ -985,13 +1388,19 @@ spec:
               key: INTERNAL_API_KEY
         command: ["/bin/sh", "-ec"]
         args:
-        - |
-          wget -qO- \
-            --header="x-api-key: ${INTERNAL_API_KEY}" \
-            http://middleware-api.plv-fabric.svc.cluster.local:4000/api/bootstrap
+        - >-
+          wget -T 15 -qO- --header="x-api-key: \${INTERNAL_API_KEY}"
+          http://middleware-api.plv-fabric.svc.cluster.local:4000/api/bootstrap
+        resources:
+          requests:
+            memory: ${bootstrap_memory_request}
+            cpu: 10m
+          limits:
+            memory: ${bootstrap_memory_limit}
+            cpu: 50m
 EOF
 
-    if ! wait_for_job_completion "$job_name" plv-fabric 180; then
+        if ! wait_for_job_completion "$job_name" plv-fabric 300; then
         echo "ERROR: Application account bootstrap failed."
         show_job_diagnostics "$job_name" plv-fabric
         return 1
@@ -1232,11 +1641,14 @@ show_status() {
 }
 
 main() {
-    check_kubectl
-
     case "$ACTION" in
+        verify)
+            verify_deployment_inputs
+            ;;
         apply)
+            check_kubectl
             check_cluster
+            validate_production_image_settings
             inject_configs
 
             echo "======================================"
@@ -1265,6 +1677,7 @@ main() {
 
             deploy_manifests
             wait_deployments
+            verify_deployed_application_revision
             bootstrap_application_accounts
             if [[ "$PROFILE" == "local" ]]; then
                 start_local_frontend
@@ -1273,10 +1686,12 @@ main() {
             echo "Deployment complete."
             ;;
         delete)
+            check_kubectl
             check_cluster
             delete_resources
             ;;
         status)
+            check_kubectl
             check_cluster
             show_status
             ;;

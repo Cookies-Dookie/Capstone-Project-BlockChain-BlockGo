@@ -21,5 +21,7 @@ namespace Client_app.Models
 
         [StringLength(5000)]
         public string? AdminResponse { get; set; }
+
+        public int? AssignedToUserId { get; set; }
     }
 }

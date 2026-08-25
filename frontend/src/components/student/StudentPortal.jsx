@@ -10,6 +10,8 @@ import { getGradeEquivalent } from '../../utils/gradingHelpers';
 
 const StudentPortal = ({ studentData, onLogout }) => {
   const [grades, setGrades] = useState([]);
+  const [gradeError, setGradeError] = useState('');
+  const [gradeMessage, setGradeMessage] = useState('');
   const [curricula, setCurricula] = useState([]);
   const [loading, setLoading] = useState(true);
   const [curriculumLoading, setCurriculumLoading] = useState(false);
@@ -26,11 +28,18 @@ const StudentPortal = ({ studentData, onLogout }) => {
 
   const loadGrades = useCallback(async (background = false) => {
     if (!background) setLoading(true);
+    setGradeError('');
     try {
       const response = await fetchStudentHistoricalGrades();
-      setGrades(Array.isArray(response?.data) ? response.data : []);
+      const records = Array.isArray(response?.data) ? response.data : [];
+      setGrades(records);
+      setGradeMessage(records.length === 0
+        ? (response?.message || 'There are currently no grade records available.')
+        : '');
     } catch (error) {
       console.error('Unable to load finalized student grade history:', error);
+      setGradeError(error.message || 'Unable to retrieve grade records from the blockchain. Please try again later.');
+      setGradeMessage('');
       if (!background) setGrades([]);
     } finally { if (!background) setLoading(false); }
   }, []);
@@ -104,7 +113,7 @@ const StudentPortal = ({ studentData, onLogout }) => {
 
         <div className="mx-6 mt-6 flex flex-wrap gap-2">{views.map((view) => <button key={view.id} type="button" onClick={() => setActiveView(view.id)} className={`rounded-lg px-4 py-2 text-sm font-bold ${activeView === view.id ? 'bg-[#003366] text-white' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'}`}>{view.label}</button>)}</div>
         <main className="mx-6 mt-4">
-          {activeView === 'grades' ? <StudentHistoricalGrades grades={grades} loading={loading} /> : null}
+          {activeView === 'grades' ? <StudentHistoricalGrades grades={grades} loading={loading} error={gradeError} emptyMessage={gradeMessage} /> : null}
           {activeView === 'transactions' ? <StudentBlockchainTransactions /> : null}
           {activeView === 'curriculum' ? <>{curriculumError ? <div className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{curriculumError}</div> : null}<CurriculumViewer curricula={curricula} currentYear={currentYear} loading={curriculumLoading} emptyMessage={curriculumError || 'No published curriculum is assigned to your account.'} /></> : null}
         </main>

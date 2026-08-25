@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, openDecryptedIpfsFile, getSystemSetting, resetEncodingSeason } from '../../services/api';
+import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, openDecryptedIpfsFile, getSystemSetting, resetEncodingSeason, correctFinalizedGradeAsRegistrar } from '../../services/api';
 import RegistrarHeader from './RegistrarHeader';
 import RegistrarSidebar from './RegistrarSidebar';
 import RegistrarDashboard from './RegistrarDashboard';
@@ -16,6 +16,7 @@ import CurriculumManagement from './CurriculumManagement';
 import { programs } from '../../data/registrarData';
 import RegistrarSupportTickets from './RegistrarSupportTickets';
 import StudentEnrollmentManagement from './StudentEnrollmentManagement';
+import PasswordManagement from './PasswordManagement';
 
 const RegistrarGradesView = ({
     loggedInEmail = '',
@@ -24,7 +25,7 @@ const RegistrarGradesView = ({
     latestChatNotice = null,
     onOpenChat,
 }) => {
-    const managementTabs = ['grades', 'Requests', 'assigning', 'bulkEnroll', 'createAccounts', 'curriculum', 'tickets', 'revokeAccounts'];
+    const managementTabs = ['grades', 'Requests', 'assigning', 'bulkEnroll', 'createAccounts', 'curriculum', 'tickets', 'passwordResets', 'revokeAccounts'];
     const managementMenuItems = [
         { id: 'grades', label: 'Grades Ledger' },
         { id: 'Requests', label: 'Pending Requests' },
@@ -33,6 +34,7 @@ const RegistrarGradesView = ({
         { id: 'createAccounts', label: 'Create Staff Accounts' },
         { id: 'curriculum', label: 'Curriculum Management' },
         { id: 'tickets', label: 'Report System Error' },
+        { id: 'passwordResets', label: 'Password Management' },
         { id: 'revokeAccounts', label: 'Account Revocation' },
     ];
     const [grades, setGrades] = useState([]);
@@ -72,6 +74,9 @@ const RegistrarGradesView = ({
     const [selectedFacultyDepartment, setSelectedFacultyDepartment] = useState('');
     const [selectedFacultyReview, setSelectedFacultyReview] = useState('');
     const [openedFacultySections, setOpenedFacultySections] = useState({});
+    const [gradeCorrection, setGradeCorrection] = useState(null);
+    const [gradeCorrectionSaving, setGradeCorrectionSaving] = useState(false);
+    const [gradeCorrectionNotice, setGradeCorrectionNotice] = useState(null);
 
     const revocationPreviewSections = [
         {
@@ -367,6 +372,11 @@ const RegistrarGradesView = ({
             loadApprovedAdmins();
             loadApprovedFaculties();
         }
+        if (mainTab === 'passwordResets') {
+            loadApprovedStudents();
+            loadApprovedAdmins();
+            loadApprovedFaculties();
+        }
     }, [mainTab, loadApprovedStudents, loadApprovedAdmins, loadApprovedFaculties]);
 
     const submitStudentAssignment = async (id) => {
@@ -444,6 +454,45 @@ const RegistrarGradesView = ({
         setVaultPassword("");
         setShowVaultPassword(false);
         setIpfsModalOpen(true);
+    };
+
+    const openGradeCorrection = (record) => {
+        const term = String(record.term || '').toLowerCase() === 'midterm' || (!record.finals && record.midterm) ? 'midterm' : 'finals';
+        setGradeCorrectionNotice(null);
+        setGradeCorrection({
+            record,
+            term,
+            newGrade: term === 'midterm' ? record.midterm : record.finals,
+            reason: '',
+        });
+    };
+
+    const submitGradeCorrection = async (event) => {
+        event.preventDefault();
+        const numericGrade = Number(gradeCorrection?.newGrade);
+        if (!Number.isFinite(numericGrade) || numericGrade < 0 || numericGrade > 100) {
+            setGradeCorrectionNotice({ type: 'error', message: 'Enter a grade between 0 and 100.' });
+            return;
+        }
+        if ((gradeCorrection?.reason || '').trim().length < 5) {
+            setGradeCorrectionNotice({ type: 'error', message: 'Enter a correction reason of at least 5 characters.' });
+            return;
+        }
+        setGradeCorrectionSaving(true);
+        setGradeCorrectionNotice(null);
+        try {
+            const response = await correctFinalizedGradeAsRegistrar(gradeCorrection.record.id, {
+                newGrade: numericGrade,
+                term: gradeCorrection.term,
+                reason: gradeCorrection.reason.trim(),
+            });
+            setGradeCorrectionNotice({ type: 'success', message: `${response?.message || 'Grade corrected.'} Ledger status: Finalized.` });
+            await loadGrades();
+        } catch (error) {
+            setGradeCorrectionNotice({ type: 'error', message: error.message || 'Unable to correct the selected grade.' });
+        } finally {
+            setGradeCorrectionSaving(false);
+        }
     };
 
     const submitIpfsPassword = async () => {
@@ -578,6 +627,16 @@ const RegistrarGradesView = ({
         }
         return { finalAverage: rawGrade };
     }, []);
+
+    const formatGradePayload = useCallback((rawGrade) => {
+        const payload = parseGradePayload(rawGrade);
+        const values = [
+            payload.midterm ? `Midterm: ${payload.midterm}` : null,
+            payload.finals ? `Finals: ${payload.finals}` : null,
+            payload.finalAverage ? `Equivalent: ${payload.finalAverage}` : null,
+        ].filter(Boolean);
+        return values.length > 0 ? values.join(' · ') : 'Not recorded';
+    }, [parseGradePayload]);
 
     const formatStudentStanding = useCallback((standing) => {
         switch (standing) {
@@ -916,10 +975,16 @@ const RegistrarGradesView = ({
                     {mainTab === 'createAccounts' && <StaffAccountCreation />}
                     {mainTab === 'curriculum' && <CurriculumManagement />}
                     {mainTab === 'tickets' && <RegistrarSupportTickets />}
+                    {mainTab === 'passwordResets' && <PasswordManagement
+                        students={approvedStudents}
+                        faculties={approvedFaculties}
+                        departmentAdmins={approvedAdmins}
+                        onRefresh={() => Promise.all([loadApprovedStudents(), loadApprovedAdmins(), loadApprovedFaculties()])}
+                    />}
                     {mainTab === 'sectionsCreated' && <RegistrarSectionsCreated />}
                     {mainTab === 'reports' && (
                         <div className="flex flex-col gap-8">
-                            <SystemLogs />
+                            <SystemLogs grades={grades} />
                             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                                 <h3 className="mb-6 text-xl font-bold text-[#003366]">System Compliance Report Preview</h3>
                                 <PdfReportViewer title="PLV System Activity & Compliance" />
@@ -1100,13 +1165,10 @@ const RegistrarGradesView = ({
                                                                                             )}
                                                                                         </td>
                                                                                         <td className="p-4">
-                                                                                            {(record.ipfs_cid || record.IpfsCID) ? (
-                                                                                                <button onClick={() => handleViewIpfs(record.ipfs_cid || record.IpfsCID)} className="font-bold text-blue-600 hover:underline">
-                                                                                                    View File
-                                                                                                </button>
-                                                                                            ) : (
-                                                                                                <span className="text-xs text-slate-400">No File</span>
-                                                                                            )}
+                                                                                            <div className="flex flex-col items-start gap-2">
+                                                                                                {String(record.status || '').toLowerCase() === 'finalized' ? <button type="button" onClick={() => openGradeCorrection(record)} className="font-bold text-amber-700 hover:underline">Correct Grade</button> : null}
+                                                                                                {(record.ipfs_cid || record.IpfsCID) ? <button onClick={() => handleViewIpfs(record.ipfs_cid || record.IpfsCID)} className="font-bold text-blue-600 hover:underline">View File</button> : <span className="text-xs text-slate-400">No File</span>}
+                                                                                            </div>
                                                                                         </td>
                                                                                     </tr>
                                                                                 ))}
@@ -1170,7 +1232,7 @@ const RegistrarGradesView = ({
                                                             {group.records.map((sg) => (
                                                                 <tr key={sg.stagingId} className="border-b border-slate-50 hover:bg-slate-50">
                                                                     <td className="p-4 font-mono text-[11px] text-slate-600">{sg.studentHash}</td>
-                                                                    <td className="p-4 font-black text-blue-700 text-center text-base">{sg.grade}</td>
+                                                                    <td className="p-4 font-bold text-blue-700 text-center text-sm">{formatGradePayload(sg.grade)}</td>
                                                                     <td className="p-4 text-center">
                                                                         <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-bold uppercase text-emerald-700">
                                                                             {sg.status}
@@ -1597,6 +1659,21 @@ const RegistrarGradesView = ({
                         <button onClick={confirmModal.onConfirm} className={`rounded-xl px-5 py-2.5 text-sm font-bold text-white transition ${confirmModal.isDestructive ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>Confirm</button>
                     </div>
                 </div>
+            </Modal>
+            <Modal isOpen={!!gradeCorrection} onClose={() => { if (!gradeCorrectionSaving) setGradeCorrection(null); }} title="Correct Finalized Student Grade">
+                {gradeCorrection ? <form onSubmit={submitGradeCorrection} className="flex flex-col gap-4">
+                    <div className="rounded-xl bg-blue-50 p-4 text-sm text-slate-700">
+                        <p><span className="font-bold">Student:</span> {gradeCorrection.record.studentDisplayName} ({gradeCorrection.record.studentDisplayId})</p>
+                        <p><span className="font-bold">Tagged subject:</span> {gradeCorrection.record.subject_code} — {gradeCorrection.record.subject_title || gradeCorrection.record.subject_name || 'Untitled subject'}</p>
+                        <p><span className="font-bold">Ledger record:</span> <span className="font-mono text-xs">{gradeCorrection.record.id}</span></p>
+                    </div>
+                    {gradeCorrectionNotice ? <div className={`rounded-lg p-3 text-sm ${gradeCorrectionNotice.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'}`}>{gradeCorrectionNotice.message}</div> : null}
+                    <label className="text-sm font-semibold text-slate-700">Term<select value={gradeCorrection.term} onChange={(event) => setGradeCorrection({ ...gradeCorrection, term: event.target.value, newGrade: event.target.value === 'midterm' ? gradeCorrection.record.midterm : gradeCorrection.record.finals })} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 font-normal"><option value="midterm">Midterm</option><option value="finals">Finals</option></select></label>
+                    <label className="text-sm font-semibold text-slate-700">New Raw Grade (0–100)<input required type="number" min="0" max="100" step="0.01" value={gradeCorrection.newGrade || ''} onChange={(event) => setGradeCorrection({ ...gradeCorrection, newGrade: event.target.value })} className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" /></label>
+                    <label className="text-sm font-semibold text-slate-700">Correction Reason<textarea required minLength="5" value={gradeCorrection.reason} onChange={(event) => setGradeCorrection({ ...gradeCorrection, reason: event.target.value })} rows="3" className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" placeholder="Explain why this finalized grade is being corrected" /></label>
+                    <p className="text-xs text-slate-500">Submitting creates a complete Returned → Corrected → Approved → Finalized history on the ledger. The student portal will show the raw grade separately from its college equivalent.</p>
+                    <div className="flex justify-end gap-3"><button type="button" disabled={gradeCorrectionSaving} onClick={() => setGradeCorrection(null)} className="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-bold">Cancel</button><button disabled={gradeCorrectionSaving} className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-slate-900 disabled:opacity-50">{gradeCorrectionSaving ? 'Committing…' : 'Commit Corrected Grade'}</button></div>
+                </form> : null}
             </Modal>
         </div>
     );

@@ -138,3 +138,70 @@ groups:
         annotations:
           summary: "C# backend pod {{ $labels.pod }} memory usage is above 85%"
           description: "The client-app container is close to its memory limit. Check request volume, logs, and database/IPFS operations."
+
+  - name: blockgo-observability
+    interval: 30s
+    rules:
+      - alert: KubernetesNodeMemoryHigh
+        expr: |
+          sum(container_memory_working_set_bytes{namespace!=""})
+          / scalar(max(machine_memory_bytes)) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          component: kubernetes
+        annotations:
+          summary: "Kubernetes node memory usage is above 90%"
+          description: "Review the Kubernetes and Node Memory dashboard for the largest namespaces and pods."
+
+      - alert: PostgreSQLExporterDown
+        expr: up{job="postgres-exporter"} == 0 or pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: postgresql
+        annotations:
+          summary: "PostgreSQL monitoring target is unavailable"
+          description: "Prometheus cannot collect PostgreSQL health and activity metrics."
+
+      - alert: FabricPeerDown
+        expr: up{job="fabric-peer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: fabric-peer
+        annotations:
+          summary: "Fabric peer {{ $labels.pod }} is unavailable"
+          description: "Check the peer operations endpoint, pod readiness, and recent Fabric logs."
+
+      - alert: FabricOrdererDown
+        expr: up{job="fabric-orderer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: fabric-orderer
+        annotations:
+          summary: "Fabric orderer {{ $labels.pod }} is unavailable"
+          description: "Check the orderer operations endpoint, Raft state, and recent Fabric logs."
+
+      - alert: ObservabilityComponentDown
+        expr: up{job="observability"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: observability
+        annotations:
+          summary: "Observability component {{ $labels.component }} is unavailable"
+          description: "Grafana dashboards may have incomplete metrics or logs until the component recovers."
+
+      - alert: BlockGOWorkflowFailureRateHigh
+        expr: |
+          sum(rate(http_requests_total{route=~".*(register|enroll|revoke|wallet|batch-upload|upload-grades|issue-grade|batch-issue-grade|audit-event).*",status=~"4..|5.."}[5m]))
+          / clamp_min(sum(rate(http_requests_total{route=~".*(register|enroll|revoke|wallet|batch-upload|upload-grades|issue-grade|batch-issue-grade|audit-event).*"}[5m])), 0.000001) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: blockgo-workflow
+        annotations:
+          summary: "BlockGO workflow failure rate is above 10%"
+          description: "Review the workflow and API dashboards, then correlate failures with Loki logs."

@@ -43,6 +43,8 @@ spec:
           name: orderer
         - containerPort: 7051
           name: metrics
+        - containerPort: 9443
+          name: operations
         env:
         - name: FABRIC_CFG_PATH
           value: /etc/hyperledger/fabric
@@ -50,6 +52,10 @@ spec:
           value: "0.0.0.0"
         - name: ORDERER_GENERAL_LISTENPORT
           value: "7050"
+        - name: ORDERER_METRICS_PROVIDER
+          value: prometheus
+        - name: ORDERER_OPERATIONS_LISTENADDRESS
+          value: 0.0.0.0:9443
         - name: ORDERER_GENERAL_BOOTSTRAPMETHOD
           value: none
         - name: ORDERER_GENERAL_LOCALMSPID
@@ -163,3 +169,6 @@ spec:
   - port: 7053
     targetPort: 7053
     name: admin
+  - port: 9443
+    targetPort: 9443
+    name: operations

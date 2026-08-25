@@ -4,6 +4,7 @@ using Client_app.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace Client_app.Controllers
 {
@@ -34,11 +35,14 @@ namespace Client_app.Controllers
             await using var command = new NpgsqlCommand(@"
                 SELECT t.ticket_id, t.title, t.description, t.severity, t.status, t.admin_response,
                        t.created_at, t.updated_at, t.resolved_at, registrar.email,
-                       COALESCE(ap.full_name, registrar.email), handler.email
+                       COALESCE(ap.full_name, registrar.email), handler.id, handler.email,
+                       COALESCE(handler_faculty.full_name, handler_admin.full_name, handler.username, handler.email)
                 FROM support_tickets t
                 JOIN users registrar ON registrar.id = t.registrar_id
                 LEFT JOIN adminprofiles ap ON ap.user_id = registrar.id
                 LEFT JOIN users handler ON handler.id = t.handled_by
+                LEFT JOIN facultyprofiles handler_faculty ON handler_faculty.user_id = handler.id
+                LEFT JOIN adminprofiles handler_admin ON handler_admin.user_id = handler.id
                 WHERE (@isAdmin OR LOWER(registrar.email) = LOWER(@actor))
                 ORDER BY CASE t.status WHEN 'OPEN' THEN 1 WHEN 'IN_PROGRESS' THEN 2 ELSE 3 END,
                          t.created_at DESC;", connection);
@@ -56,10 +60,51 @@ namespace Client_app.Controllers
                     createdAt = reader.GetFieldValue<DateTimeOffset>(6), updatedAt = reader.GetFieldValue<DateTimeOffset>(7),
                     resolvedAt = reader.IsDBNull(8) ? (DateTimeOffset?)null : reader.GetFieldValue<DateTimeOffset>(8),
                     registrarEmail = reader.GetString(9), registrarName = reader.GetString(10),
-                    handledBy = reader.IsDBNull(11) ? null : reader.GetString(11)
+                    handledByUserId = reader.IsDBNull(11) ? (int?)null : reader.GetInt32(11),
+                    handledBy = reader.IsDBNull(12) ? null : reader.GetString(12),
+                    handledByName = reader.IsDBNull(13) ? null : reader.GetString(13)
                 });
             }
             return Ok(new { status = "Success", data = tickets });
+        }
+
+        [HttpGet("personnel")]
+        [Authorize(Roles = "system_admin")]
+        public async Task<IActionResult> ListAvailablePersonnel(CancellationToken cancellationToken)
+        {
+            await using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var command = new NpgsqlCommand(@"
+                SELECT u.id,
+                       COALESCE(fp.full_name, ap.full_name, u.username, u.email) AS full_name,
+                       u.email,
+                       LOWER(u.role) AS role,
+                       COUNT(t.ticket_id) FILTER (WHERE t.status IN ('OPEN', 'IN_PROGRESS')) AS active_assignments
+                FROM users u
+                LEFT JOIN facultyprofiles fp ON fp.user_id = u.id
+                LEFT JOIN adminprofiles ap ON ap.user_id = u.id
+                LEFT JOIN support_tickets t ON t.handled_by = u.id
+                WHERE u.is_active = TRUE
+                  AND LOWER(u.status) = 'approved'
+                  AND LOWER(u.role) IN ('system_admin', 'registrar', 'department_admin', 'faculty')
+                GROUP BY u.id, fp.full_name, ap.full_name
+                ORDER BY active_assignments, full_name, u.email;", connection);
+
+            var personnel = new List<object>();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                personnel.Add(new
+                {
+                    userId = reader.GetInt32(0),
+                    fullName = reader.GetString(1),
+                    email = reader.GetString(2),
+                    role = reader.GetString(3),
+                    activeAssignments = reader.GetInt64(4)
+                });
+            }
+
+            return Ok(new { status = "Success", data = personnel });
         }
 
         [HttpPost]
@@ -101,20 +146,41 @@ namespace Client_app.Controllers
             await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+            string? assignedToEmail = null;
+            if (request.AssignedToUserId.HasValue)
+            {
+                await using var personnelCommand = new NpgsqlCommand(@"
+                    SELECT email
+                    FROM users
+                    WHERE id = @userId
+                      AND is_active = TRUE
+                      AND LOWER(status) = 'approved'
+                      AND LOWER(role) IN ('system_admin', 'registrar', 'department_admin', 'faculty');", connection, transaction);
+                personnelCommand.Parameters.Add("userId", NpgsqlDbType.Integer).Value = request.AssignedToUserId.Value;
+                assignedToEmail = (string?)await personnelCommand.ExecuteScalarAsync(cancellationToken);
+                if (assignedToEmail is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return BadRequest(new { status = "Error", message = "The selected personnel member is not available for assignment." });
+                }
+            }
+
             await using var command = new NpgsqlCommand(@"
                 UPDATE support_tickets
                 SET status = @status, admin_response = @response,
-                    handled_by = (SELECT id FROM users WHERE LOWER(email) = LOWER(@actor)),
+                    handled_by = COALESCE(@assignedToUserId, handled_by),
                     updated_at = CURRENT_TIMESTAMP,
                     resolved_at = CASE WHEN @status IN ('RESOLVED', 'CLOSED') THEN CURRENT_TIMESTAMP ELSE NULL END
                 WHERE ticket_id = @ticketId RETURNING ticket_id;", connection, transaction);
             command.Parameters.AddWithValue("status", status);
             command.Parameters.AddWithValue("response", (object?)request.AdminResponse?.Trim() ?? DBNull.Value);
-            command.Parameters.AddWithValue("actor", ActorEmail());
+            command.Parameters.Add("assignedToUserId", NpgsqlDbType.Integer).Value = (object?)request.AssignedToUserId ?? DBNull.Value;
             command.Parameters.AddWithValue("ticketId", ticketId);
             if (await command.ExecuteScalarAsync(cancellationToken) is null) return NotFound(new { status = "Error", message = "Ticket not found." });
             await _auditLog.LogAsync(ActorEmail(), "system_admin", "SUPPORT_TICKET_UPDATED", "support_ticket", ticketId.ToString(), null,
-                new { status, hasResponse = !string.IsNullOrWhiteSpace(request.AdminResponse) }, "System Administrator updated a Registrar support ticket.",
+                new { status, hasResponse = !string.IsNullOrWhiteSpace(request.AdminResponse), assignedToUserId = request.AssignedToUserId, assignedToEmail },
+                "System Administrator updated and assigned a Registrar support ticket.",
                 HttpContext.Connection.RemoteIpAddress?.ToString(), connection, transaction, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return Ok(new { status = "Success", message = "Ticket updated." });

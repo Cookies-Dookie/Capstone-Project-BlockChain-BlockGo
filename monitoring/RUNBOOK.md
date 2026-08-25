@@ -4,6 +4,48 @@ The stable `middleware-api` Deployment is the edge gateway. Route owners are
 `auth-service`, `fabric-identity-service`, `ledger-service`,
 `grade-upload-service`, and `settings-service`.
 
+## System Admin Grafana
+
+Grafana is provisioned with these System Admin dashboards:
+
+- Kubernetes and node memory
+- API errors and latency
+- Hyperledger Fabric peers and orderers
+- PostgreSQL
+- BlockGO workflow metrics
+- Kubernetes and application logs from Loki
+
+Grafana has no public Ingress or NodePort. It is available only from the
+**Grafana Observability** page in the System Admin portal. The backend issues a
+short-lived HttpOnly session after verifying the `system_admin` role and then
+proxies the embedded Grafana UI. Hiding the navigation item is not the security
+boundary; the backend role check and private ClusterIP service are.
+
+Check the observability workloads:
+
+```bash
+kubectl get pods -n plv-fabric -l tier=observability
+kubectl get pod -n plv-main-campus -l app=postgres-exporter
+kubectl logs -n plv-fabric deployment/prometheus --tail=100
+kubectl logs -n plv-fabric deployment/loki --tail=100
+kubectl logs -n plv-fabric deployment/alloy --tail=100
+kubectl logs -n plv-fabric deployment/grafana --tail=100
+```
+
+Check Prometheus targets from inside the cluster:
+
+```bash
+kubectl run prometheus-check --rm -i --restart=Never -n plv-fabric --image=curlimages/curl -- \
+  curl -fsS http://prometheus:9090/api/v1/targets
+```
+
+Check Loki ingestion:
+
+```bash
+kubectl run loki-check --rm -i --restart=Never -n plv-fabric --image=curlimages/curl -- \
+  curl -fsS http://loki:3100/loki/api/v1/labels
+```
+
 ## Memory Alerts
 
 1. Check pod memory and restarts:

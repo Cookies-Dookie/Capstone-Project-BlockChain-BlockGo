@@ -4,7 +4,13 @@ import { getGradeEquivalent } from '../../utils/gradingHelpers';
 const yearLabels = { 1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year' };
 const semesterOrder = ['1st Semester', 'First Semester', '2nd Semester', 'Second Semester', 'Midyear', 'Summer'];
 
-const StudentHistoricalGrades = ({ grades = [], loading = false }) => {
+const displayEquivalent = (grade) => {
+  const numericGrade = Number(grade.finalAverage || grade.grade);
+  if (!Number.isFinite(numericGrade)) return '—';
+  return numericGrade > 5 ? getGradeEquivalent(numericGrade) : numericGrade.toFixed(2);
+};
+
+const StudentHistoricalGrades = ({ grades = [], loading = false, error = '', emptyMessage = '' }) => {
   const availableYears = useMemo(() => new Set(grades.map((grade) => Number(grade.yearLevel)).filter(Boolean)), [grades]);
   const [activeYear, setActiveYear] = useState(() => Number([...availableYears][0]) || 1);
 
@@ -17,6 +23,27 @@ const StudentHistoricalGrades = ({ grades = [], loading = false }) => {
     });
 
   if (loading) return <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-500">Loading your finalized grade history…</div>;
+
+  if (error) {
+    return (
+      <section className="rounded-2xl border border-red-200 bg-white p-4 shadow-sm sm:p-6">
+        <h2 className="text-xl font-bold text-[#003366]">My Grades</h2>
+        <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-6 text-center text-red-700">{error}</div>
+      </section>
+    );
+  }
+
+  if (grades.length === 0) {
+    return (
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+        <h2 className="text-xl font-bold text-[#003366]">My Grades</h2>
+        <p className="mt-1 text-sm text-slate-500">Finalized, read-only academic records from 1st through 4th Year.</p>
+        <div className="mt-5 rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
+          {emptyMessage || 'There are currently no grade records available.'}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -50,7 +77,7 @@ const StudentHistoricalGrades = ({ grades = [], loading = false }) => {
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-4 py-3">Subject</th><th className="px-4 py-3">Professor</th><th className="px-4 py-3">Units</th>
-                    <th className="px-4 py-3">Term</th><th className="px-4 py-3">Grade</th><th className="px-4 py-3">School Year</th>
+                    <th className="px-4 py-3">Term</th><th className="px-4 py-3">Grade</th><th className="px-4 py-3">Equivalent</th><th className="px-4 py-3">School Year</th>
                     <th className="px-4 py-3">Status</th><th className="px-4 py-3">Transaction</th>
                   </tr>
                 </thead>
@@ -61,7 +88,8 @@ const StudentHistoricalGrades = ({ grades = [], loading = false }) => {
                       <td className="px-4 py-3 text-slate-700">{grade.professor || 'Not recorded'}</td>
                       <td className="px-4 py-3">{grade.units || '—'}</td>
                       <td className="px-4 py-3 capitalize">{grade.term}</td>
-                      <td className="px-4 py-3 font-bold">{grade.grade || '—'}{grade.term === 'finals' && grade.finalAverage ? <span className="block text-xs font-normal text-slate-500">Equivalent: {Number(grade.finalAverage) > 5 ? getGradeEquivalent(grade.finalAverage) : grade.finalAverage}</span> : null}</td>
+                      <td className="px-4 py-3 font-bold">{grade.grade || '—'}</td>
+                      <td className="px-4 py-3 font-bold text-[#003366]">{displayEquivalent(grade)}</td>
                       <td className="px-4 py-3">{grade.schoolYear || '—'}</td>
                       <td className="px-4 py-3"><span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-800">{grade.status}</span></td>
                       <td className="max-w-[180px] truncate px-4 py-3 font-mono text-xs" title={grade.transactionHash || grade.transactionId}>{grade.transactionHash || grade.transactionId || 'Legacy record'}</td>

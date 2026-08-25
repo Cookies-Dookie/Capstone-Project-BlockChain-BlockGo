@@ -155,7 +155,7 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: ipfs-gateway
+            name: ipfs-ha-gateway
             port:
               number: 8080
       - path: /api

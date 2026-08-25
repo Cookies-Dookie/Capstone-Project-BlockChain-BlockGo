@@ -664,7 +664,7 @@ func (cc *SmartContract) getStudentTransactions(stub shim.ChaincodeStubInterface
 				"transaction_id":   entry.TxId,
 				"transaction_hash": entry.TxId,
 				"transaction_type": gradeTransactionType(record.Status),
-				"timestamp":        entry.Timestamp.String(),
+				"timestamp":        time.Unix(entry.Timestamp.Seconds, int64(entry.Timestamp.Nanos)).UTC().Format(time.RFC3339Nano),
 				"record":           record,
 			})
 		}
@@ -768,7 +768,7 @@ func (cc *SmartContract) getGradeHistory(stub shim.ChaincodeStubInterface, args 
 
 		historyRecord := map[string]interface{}{
 			"txId":      response.TxId,
-			"timestamp": response.Timestamp.String(),
+			"timestamp": time.Unix(response.Timestamp.Seconds, int64(response.Timestamp.Nanos)).UTC().Format(time.RFC3339Nano),
 			"isDelete":  response.IsDelete,
 			"value":     value,
 		}

@@ -177,6 +177,8 @@ spec:
           name: chaincode
         - containerPort: 7053
           name: events
+        - containerPort: 9443
+          name: operations
         env:
         - name: FABRIC_CFG_PATH
           value: /etc/hyperledger/fabric
@@ -224,6 +226,8 @@ spec:
               key: COUCHDB_PASS
         - name: CORE_METRICS_PROVIDER
           value: prometheus
+        - name: CORE_OPERATIONS_LISTENADDRESS
+          value: 0.0.0.0:9443
         resources:
           requests:
             cpu: "250m"
@@ -309,6 +313,10 @@ spec:
     targetPort: 7053
     protocol: TCP
     name: events
+  - port: 9443
+    targetPort: 9443
+    protocol: TCP
+    name: operations
 ---
 apiVersion: apps/v1
 kind: StatefulSet

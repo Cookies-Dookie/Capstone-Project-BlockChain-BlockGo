@@ -317,8 +317,8 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: fabric-storage
   claimRef:
-    namespace: plv-fabric
-    name: ipfs-data-ipfs-node-1
+    namespace: plv-annex-campus
+    name: ipfs-data-ipfs-annex-0
   hostPath:
     path: ${PWD}/fabric-k8s-data/ipfs-2
     type: DirectoryOrCreate
@@ -335,8 +335,8 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: fabric-storage
   claimRef:
-    namespace: plv-fabric
-    name: ipfs-data-ipfs-node-2
+    namespace: plv-pubad-campus
+    name: ipfs-data-ipfs-pubad-0
   hostPath:
     path: ${PWD}/fabric-k8s-data/ipfs-3
     type: DirectoryOrCreate

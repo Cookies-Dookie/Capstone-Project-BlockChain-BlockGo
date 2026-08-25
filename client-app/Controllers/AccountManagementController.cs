@@ -2,6 +2,7 @@ using Client_app.Models;
 using Client_app.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace Client_app.Controllers
 {
@@ -64,7 +65,32 @@ namespace Client_app.Controllers
             catch (InvalidOperationException ex) { return Conflict(new { status = "Error", message = ex.Message }); }
         }
 
+        [HttpPut("users/{userId:int}/password")]
+        [Authorize(Roles = "registrar,system_admin")]
+        public async Task<IActionResult> ResetPassword(int userId, [FromBody] ManualPasswordResetRequest request, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var result = await _accounts.ResetPasswordAsync(
+                    userId,
+                    request.NewPassword,
+                    RequiredActor(),
+                    RequiredActorRole(),
+                    HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    cancellationToken);
+                return Ok(new { status = "Success", message = $"Password reset for {result.Email}.", data = result });
+            }
+            catch (KeyNotFoundException ex) { return NotFound(new { status = "Error", message = ex.Message }); }
+            catch (ArgumentException ex) { return BadRequest(new { status = "Error", message = ex.Message }); }
+            catch (UnauthorizedAccessException ex) { return StatusCode(StatusCodes.Status403Forbidden, new { status = "Error", message = ex.Message }); }
+        }
+
         private string RequiredActor() => User.Identity?.Name
             ?? throw new UnauthorizedAccessException("Authenticated account identity is missing.");
+
+        private string RequiredActorRole() => (User.FindFirstValue("dbRole")
+            ?? User.FindFirstValue(ClaimTypes.Role)
+            ?? throw new UnauthorizedAccessException("Authenticated account role is missing."))
+            .Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
     }
 }

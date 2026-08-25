@@ -97,11 +97,13 @@ spec:
         - name: Monitoring__MiddlewareUrl
           value: "http://middleware-api.plv-fabric.svc.cluster.local:4000"
         - name: Monitoring__PrometheusUrl
-          valueFrom:
-            secretKeyRef:
-              name: blockgo-secrets
-              key: PROMETHEUS_URL
-              optional: true
+          value: "http://prometheus.plv-fabric.svc.cluster.local:9090"
+        - name: PROMETHEUS_URL
+          value: "http://prometheus.plv-fabric.svc.cluster.local:9090"
+        - name: Monitoring__GrafanaUrl
+          value: "http://grafana.plv-fabric.svc.cluster.local:3000"
+        - name: GRAFANA_URL
+          value: "http://grafana.plv-fabric.svc.cluster.local:3000"
         - name: InternalApiKey
           valueFrom:
             secretKeyRef:
@@ -113,15 +115,15 @@ spec:
               name: blockgo-secrets
               key: INTERNAL_API_KEY
         - name: IPFS_HOST
-          value: "ipfs-gateway.plv-fabric.svc.cluster.local"
+          value: "ipfs-ha-gateway.plv-fabric.svc.cluster.local"
         - name: IpfsApiUrl
-          value: "http://ipfs-api.plv-fabric.svc.cluster.local:5001/api/v0/add?cid-version=1&wrap-with-directory=false"
+          value: "http://ipfs-ha-api.plv-fabric.svc.cluster.local:5001/api/v0/add?cid-version=1&wrap-with-directory=false"
         - name: IpfsUrl
-          value: "http://ipfs-api.plv-fabric.svc.cluster.local:5001"
+          value: "http://ipfs-ha-api.plv-fabric.svc.cluster.local:5001"
         - name: IpfsGatewayUrl
-          value: "http://ipfs-gateway.plv-fabric.svc.cluster.local:8080"
+          value: "http://ipfs-ha-gateway.plv-fabric.svc.cluster.local:8080"
         - name: IPFS_PEER_NODES
-          value: "ipfs-node-0.ipfs-headless.plv-fabric.svc.cluster.local"
+          value: "ipfs-api.plv-fabric.svc.cluster.local,ipfs-annex-api.plv-annex-campus.svc.cluster.local,ipfs-pubad-api.plv-pubad-campus.svc.cluster.local"
         - name: POSTGRES_DB
           value: "ActivityLogs"
         - name: POSTGRES_USER

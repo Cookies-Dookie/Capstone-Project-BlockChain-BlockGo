@@ -77,6 +77,11 @@ app.get('/api/all-grades', authenticate, async (req, res) => {
         let grades;
         try { grades = JSON.parse(result.toString()); }
         catch { return res.json({ status: 'success', data: result.toString() }); }
+        // Go marshals a nil grade slice as JSON null when the ledger has no records.
+        // Normalize only that valid empty-ledger result; malformed non-array payloads
+        // must still surface as errors instead of being reported as "no records".
+        if (grades === null) grades = [];
+        if (!Array.isArray(grades)) throw new Error('The grade ledger returned an invalid response.');
         decodeFacultyIdentity(grades);
         const role = normalizeAuthRole(actor.dbRole);
         if (role === 'student') {
@@ -110,6 +115,7 @@ app.get('/api/student-transactions', authenticate, async (req, res) => {
         res.json({ status: 'success', data: JSON.parse(result.toString()) });
     } catch (error) {
         onLedgerError(actor?.username, error);
+        logger.error({ err: error, username: actor?.username }, 'Student transaction history query failed');
         res.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Unable to retrieve transaction history' : error.message });
     }
 });

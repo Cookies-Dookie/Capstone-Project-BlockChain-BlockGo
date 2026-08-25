@@ -12,7 +12,7 @@ data:
   UPLOAD_SERVICE_URL: http://grade-upload-service.plv-fabric.svc.cluster.local:4004
   SETTINGS_SERVICE_URL: http://settings-service.plv-fabric.svc.cluster.local:4005
   CSHARP_API_URL: http://client-app-service.plv-fabric.svc.cluster.local:5000
-  IPFS_API_URL: /dns4/ipfs-api.plv-fabric.svc.cluster.local/tcp/5001/http
+  IPFS_API_URL: /dns4/ipfs-ha-api.plv-fabric.svc.cluster.local/tcp/5001/http
   POSTGRES_DB: ActivityLogs
   POSTGRES_HOST: postgres.plv-main-campus.svc.cluster.local
   POSTGRES_PORT: "5432"
@@ -32,6 +32,7 @@ data:
   FABRIC_CA_DEPARTMENT_TLS_CERT: /etc/hyperledger/fabric-ca-roots/department-tls-cert.pem
   FABRIC_CA_INSECURE_TLS: "false"
   FABRIC_GATEWAY_TLS_ROOTS: /etc/hyperledger/fabric-gateway-tls
+  FABRIC_DISCOVERY_ENABLED: "false"
   CONNECTION_PROFILE_PATH: /app/connection.json
   GATEWAY_CACHE_MAX_USERS: "500"
   GATEWAY_IDLE_TIMEOUT_MS: "300000"

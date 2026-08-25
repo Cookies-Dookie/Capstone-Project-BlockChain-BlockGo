@@ -104,7 +104,7 @@ spec:
         - name: CSHARP_API_URL
           value: "http://client-app-service.plv-fabric.svc.cluster.local:5000"
         - name: IPFS_API_URL
-          value: "/dns4/ipfs-api.plv-fabric.svc.cluster.local/tcp/5001/http"
+          value: "/dns4/ipfs-ha-api.plv-fabric.svc.cluster.local/tcp/5001/http"
         - name: POSTGRES_DB
           value: ActivityLogs
         - name: POSTGRES_HOST
