@@ -258,6 +258,11 @@ try
     });
 
     builder.Services.AddHttpClient<IBlockchainService, BlockchainService>();
+    builder.Services.AddHttpClient("BackendKeepAlive", client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(10);
+    });
+    builder.Services.AddHostedService<BackendKeepAliveService>();
     builder.Services.AddScoped<IFabricCaAuthService, FabricCaAuthService>();
     builder.Services.AddScoped<IEmailService, EmailService>();
     builder.Services.AddScoped<IAuditLogService, AuditLogService>();

@@ -85,11 +85,13 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
     admin_response TEXT,
     handled_by INTEGER REFERENCES users(id),
+    assigned_specialist VARCHAR(40),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT ck_support_ticket_severity CHECK (severity IN ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')),
-    CONSTRAINT ck_support_ticket_status CHECK (status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'))
+    CONSTRAINT ck_support_ticket_status CHECK (status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
+    CONSTRAINT ck_support_ticket_specialist CHECK (assigned_specialist IS NULL OR assigned_specialist IN ('IT_ADMIN', 'FRONTEND_DEVELOPER', 'BACKEND_DEVELOPER', 'NETWORK_SPECIALIST'))
 );
 
 CREATE TABLE IF NOT EXISTS password_reset_requests (

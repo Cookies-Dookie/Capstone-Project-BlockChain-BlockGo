@@ -4,14 +4,11 @@ namespace Client_app.Models
 {
     public sealed class CreateSupportTicketRequest
     {
-        [Required, StringLength(200, MinimumLength = 3)]
-        public string Title { get; set; } = string.Empty;
-
         [Required, StringLength(5000, MinimumLength = 10)]
         public string Description { get; set; } = string.Empty;
 
         [Required]
-        public string Severity { get; set; } = "NORMAL";
+        public string AssignedSpecialist { get; set; } = string.Empty;
     }
 
     public sealed class UpdateSupportTicketRequest
@@ -22,6 +19,13 @@ namespace Client_app.Models
         [StringLength(5000)]
         public string? AdminResponse { get; set; }
 
-        public int? AssignedToUserId { get; set; }
+        [Required]
+        public string AssignedSpecialist { get; set; } = string.Empty;
+    }
+
+    public sealed class BroadcastSupportNoticeRequest
+    {
+        [Required, StringLength(1000, MinimumLength = 3)]
+        public string Message { get; set; } = string.Empty;
     }
 }

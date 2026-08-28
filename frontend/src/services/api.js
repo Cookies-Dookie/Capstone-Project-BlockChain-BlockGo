@@ -172,6 +172,9 @@ export const updateRegistrarAccount = async (userId, changes) => fetchWithAuth(`
     method: 'PUT',
     body: JSON.stringify(changes),
 });
+export const deleteRegistrarAccount = async (userId) => fetchWithAuth(`/AccountManagement/registrars/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+});
 export const resetManagedAccountPassword = async (userId, newPassword) => fetchWithAuth(`/AccountManagement/users/${encodeURIComponent(userId)}/password`, {
     method: 'PUT',
     body: JSON.stringify({ newPassword }),
@@ -197,9 +200,10 @@ export const fetchFacultyCurriculums = async () => fetchWithAuth('/Curriculums/f
 
 // ==================== REGISTRAR SUPPORT TICKETS ====================
 export const fetchSupportTickets = async () => fetchWithAuth('/SupportTickets');
-export const fetchSupportPersonnel = async () => fetchWithAuth('/SupportTickets/personnel');
+export const fetchSupportSpecialists = async () => fetchWithAuth('/SupportTickets/specialists');
 export const createSupportTicket = async (ticket) => fetchWithAuth('/SupportTickets', { method: 'POST', body: JSON.stringify(ticket) });
 export const updateSupportTicket = async (id, update) => fetchWithAuth(`/SupportTickets/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(update) });
+export const broadcastSupportNotice = async (message) => fetchWithAuth('/SupportTickets/broadcast', { method: 'POST', body: JSON.stringify({ message }) });
 export const resolveSecurityEvent = async (id) => fetchWithAuth(`/SystemMonitoring/security-events/${encodeURIComponent(id)}/resolve`, { method: 'POST' });
 
 // ==================== GRADES API - C# STAGING + BLOCKCHAIN LEDGER ====================

@@ -221,18 +221,22 @@ app.get('/api/bootstrap', requireInternalKey, async (req, res) => {
             result = await client.query("INSERT INTO users (email, password_hash, role, status, is_active) VALUES ($1, $2, 'system_admin', 'APPROVED', TRUE) RETURNING id", [systemEmail, await bcrypt.hash(systemPassword, 10)]);
             await client.query("INSERT INTO adminprofiles (user_id, full_name, admin_level) VALUES ($1, 'System Administrator', 'system_admin')", [result.rows[0].id]);
         }
-        result = await client.query('SELECT id FROM users WHERE email = $1', [registrarEmail]);
+        result = await client.query('SELECT id, role, status, is_active FROM users WHERE email = $1', [registrarEmail]);
         if (!result.rows.length) {
-            result = await client.query("INSERT INTO users (email, password_hash, role, status, is_active) VALUES ($1, $2, 'registrar', 'APPROVED', TRUE) RETURNING id", [registrarEmail, await bcrypt.hash(registrarPassword, 10)]);
+            result = await client.query("INSERT INTO users (email, password_hash, role, status, is_active) VALUES ($1, $2, 'registrar', 'APPROVED', TRUE) RETURNING id, role, status, is_active", [registrarEmail, await bcrypt.hash(registrarPassword, 10)]);
             await client.query("INSERT INTO adminprofiles (user_id, full_name, admin_level, department) VALUES ($1, 'System Registrar', 'registrar', 'Registrar')", [result.rows[0].id]);
         }
+        const bootstrapRegistrarIsActive = String(result.rows[0].role || '').toLowerCase() === 'registrar' &&
+            String(result.rows[0].status || '').toLowerCase() === 'approved' && result.rows[0].is_active !== false;
         await client.query('COMMIT');
         committed = true;
-        await requestJson(`${serviceUrl('IDENTITY_SERVICE_URL', 'fabric-identity-service', 4002)}/internal/identities/bootstrap-registrar`, {
-            method: 'POST', timeoutMs: 45000,
-            headers: { 'x-api-key': required('INTERNAL_API_KEY') },
-            body: { username: registrarEmail, password: registrarPassword }
-        });
+        if (bootstrapRegistrarIsActive) {
+            await requestJson(`${serviceUrl('IDENTITY_SERVICE_URL', 'fabric-identity-service', 4002)}/internal/identities/bootstrap-registrar`, {
+                method: 'POST', timeoutMs: 45000,
+                headers: { 'x-api-key': required('INTERNAL_API_KEY') },
+                body: { username: registrarEmail, password: registrarPassword }
+            });
+        }
         res.json({ status: 'success', message: 'System administrator and registrar bootstrap is complete.' });
     } catch (error) {
         if (!committed) await client.query('ROLLBACK');

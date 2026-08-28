@@ -13,7 +13,6 @@ const statusStyles = {
 
 const viewTitles = {
   overview: 'System Overview',
-  services: 'Service Health',
   infrastructure: 'Infrastructure & Data',
   alerts: 'Active Alerts',
 };
@@ -74,41 +73,6 @@ function Metric({ label, value, tone = 'default' }) {
       <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
       <p className="mt-2 break-words text-2xl font-bold">{value}</p>
     </article>
-  );
-}
-
-function ServiceTable({ services }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full table-fixed text-left text-sm">
-        <thead className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase text-slate-500">
-          <tr>
-            <th className="w-[28%] px-4 py-3">Service</th>
-            <th className="w-[18%] px-4 py-3">Status</th>
-            <th className="w-[14%] px-4 py-3">Latency</th>
-            <th className="w-[40%] px-4 py-3">Result</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {services.map((service) => (
-            <tr key={service.id} className="align-top">
-              <td className="px-4 py-4">
-                <p className="font-bold text-slate-900">{service.name}</p>
-                <p className="mt-1 text-xs text-slate-500">{service.layer}</p>
-              </td>
-              <td className="px-4 py-4"><StatusBadge status={service.status} /></td>
-              <td className="px-4 py-4 font-mono text-xs text-slate-700">
-                {service.latencyMs !== null && service.latencyMs !== undefined ? `${service.latencyMs} ms` : '--'}
-              </td>
-              <td className="px-4 py-4">
-                <p className="break-words text-slate-700">{service.message}</p>
-                <p className="mt-1 break-all font-mono text-xs text-slate-500">{service.target}</p>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }
 
@@ -183,12 +147,10 @@ function SystemMonitoring({ activeView = 'overview' }) {
     };
   }, [refresh]);
 
-  const services = summary?.services || [];
   const alerts = summary?.alerts || [];
   const runtime = summary?.runtime || {};
   const database = summary?.database || {};
   const infrastructure = summary?.infrastructure || {};
-  const healthyServices = services.filter((service) => service.status === 'healthy').length;
   const metricsAvailable = infrastructure.source === 'prometheus';
   const overallStatus = summary?.status || (isRefreshing ? 'checking' : 'warning');
   const resolveEvent = async (eventId) => {
@@ -198,19 +160,11 @@ function SystemMonitoring({ activeView = 'overview' }) {
 
   const overview = (
     <div className="space-y-5">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Metric label="Overall" value={overallStatus.replaceAll('_', ' ')} tone={overallStatus} />
-        <Metric label="Healthy Services" value={`${healthyServices} / ${services.length || '--'}`} tone="healthy" />
         <Metric label="Active Alerts" value={metricsAvailable ? alerts.length : '--'} tone={alerts.length ? 'warning' : 'default'} />
         <Metric label="Backend Uptime" value={formatDuration(runtime.uptimeSeconds)} />
       </div>
-
-      <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h3 className="text-base font-bold text-[#003366]">Platform Services</h3>
-        </div>
-        <ServiceTable services={services} />
-      </section>
 
       <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-4">
@@ -219,12 +173,6 @@ function SystemMonitoring({ activeView = 'overview' }) {
         <AlertsTable alerts={alerts.slice(0, 5)} metricsAvailable={metricsAvailable} onResolve={resolveEvent} />
       </section>
     </div>
-  );
-
-  const serviceView = (
-    <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
-      <ServiceTable services={services} />
-    </section>
   );
 
   const infrastructureView = (
@@ -302,8 +250,7 @@ function SystemMonitoring({ activeView = 'overview' }) {
         <div className="rounded-md border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-600 shadow-sm">
           Loading system status...
         </div>
-      ) : activeView === 'services' ? serviceView
-        : activeView === 'infrastructure' ? infrastructureView
+      ) : activeView === 'infrastructure' ? infrastructureView
           : activeView === 'alerts' ? alertView
             : overview}
     </div>

@@ -10,7 +10,6 @@ const navigationItems = [
   { id: 'overview', label: 'Overview' },
   { id: 'registrars', label: 'Registrar Accounts' },
   { id: 'tickets', label: 'Error Reports' },
-  { id: 'services', label: 'Services' },
   { id: 'infrastructure', label: 'Infrastructure & Data' },
   { id: 'alerts', label: 'Alerts' },
   { id: 'observability', label: 'Grafana Observability' },

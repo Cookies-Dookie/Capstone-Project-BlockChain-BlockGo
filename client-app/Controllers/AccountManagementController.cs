@@ -65,6 +65,25 @@ namespace Client_app.Controllers
             catch (InvalidOperationException ex) { return Conflict(new { status = "Error", message = ex.Message }); }
         }
 
+        [HttpDelete("registrars/{userId:int}")]
+        [Authorize(Roles = "system_admin")]
+        public async Task<IActionResult> DeleteRegistrar(int userId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var result = await _accounts.DeleteRegistrarAsync(
+                    userId, RequiredActor(), HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+                return Ok(new
+                {
+                    status = "Success",
+                    message = "Registrar account deleted. A new Registrar account can now be created.",
+                    data = result
+                });
+            }
+            catch (KeyNotFoundException ex) { return NotFound(new { status = "Error", message = ex.Message }); }
+            catch (InvalidOperationException ex) { return Conflict(new { status = "Error", message = ex.Message }); }
+        }
+
         [HttpPut("users/{userId:int}/password")]
         [Authorize(Roles = "registrar,system_admin")]
         public async Task<IActionResult> ResetPassword(int userId, [FromBody] ManualPasswordResetRequest request, CancellationToken cancellationToken)
