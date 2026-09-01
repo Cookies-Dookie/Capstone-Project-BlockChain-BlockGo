@@ -188,6 +188,11 @@ function AppContent() {
     addNotification(`New registration request from ${name} (${role})`, 'success');
   }, [addNotification, user?.role]);
 
+  const handleSupportNotice = useCallback((notice) => {
+    const message = notice?.displayMessage || notice?.DisplayMessage;
+    if (message) addNotification(message, 'notice');
+  }, [addNotification]);
+
   const currentUserRole = normalizeAppRole(user?.role);
   const canUseChat = ['student', 'faculty', 'department_admin', 'registrar', 'system_admin'].includes(currentUserRole);
 
@@ -236,6 +241,7 @@ function AppContent() {
             onUnreadChange={handleUnreadChange}
             onIncomingMessage={handleIncomingMessage}
             onRegistrationRequest={handleRegistrationRequest}
+            onSupportNotice={handleSupportNotice}
             autoOpenTarget={chatAutoOpenTarget}
           />}
 

@@ -85,7 +85,7 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
+            requests: { cpu: 10m, memory: 24Mi }
             limits: { cpu: "1", memory: 1Gi }
           volumeMounts:
             - name: config
@@ -189,7 +189,7 @@ spec:
             httpGet: { path: /, port: http }
             periodSeconds: 5
           resources:
-            requests: { cpu: 50m, memory: 128Mi }
+            requests: { cpu: 5m, memory: 8Mi }
             limits: { cpu: 250m, memory: 256Mi }
 ---
 apiVersion: v1
@@ -250,7 +250,7 @@ spec:
             tcpSocket: { port: metrics }
             periodSeconds: 5
           resources:
-            requests: { cpu: 25m, memory: 64Mi }
+            requests: { cpu: 5m, memory: 8Mi }
             limits: { cpu: 200m, memory: 192Mi }
 ---
 apiVersion: v1
@@ -355,7 +355,7 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
+            requests: { cpu: 10m, memory: 32Mi }
             limits: { cpu: "1", memory: 1Gi }
           volumeMounts:
             - name: config
@@ -524,7 +524,7 @@ spec:
             httpGet: { path: /-/ready, port: http }
             periodSeconds: 5
           resources:
-            requests: { cpu: 50m, memory: 128Mi }
+            requests: { cpu: 5m, memory: 16Mi }
             limits: { cpu: 500m, memory: 512Mi }
           volumeMounts:
             - name: config
@@ -656,6 +656,8 @@ spec:
               value: Admin
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
+            - name: GF_USERS_DEFAULT_THEME
+              value: light
             - name: GF_ANALYTICS_REPORTING_ENABLED
               value: "false"
             - name: GF_ANALYTICS_CHECK_FOR_UPDATES
@@ -671,7 +673,7 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 10
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
+            requests: { cpu: 10m, memory: 24Mi }
             limits: { cpu: "1", memory: 768Mi }
           volumeMounts:
             - name: provisioning

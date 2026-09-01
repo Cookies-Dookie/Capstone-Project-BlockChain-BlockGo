@@ -9,6 +9,8 @@ namespace Client_app.Services
 {
     public sealed class AccountProvisioningService : IAccountProvisioningService
     {
+        private const int MaximumRegistrarAccounts = 2;
+        private const long RegistrarCapacityLockId = 2026082802;
         private readonly string _connectionString;
         private readonly string _middlewareBaseUrl;
         private readonly string _internalApiKey;
@@ -144,6 +146,7 @@ namespace Client_app.Services
             await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await EnsureRegistrarCapacityAsync(connection, transaction, cancellationToken);
             await EnsureUniqueAccountAsync(connection, transaction, email, accountId, cancellationToken);
             await RegisterFabricIdentityAsync(email, BuildEnrollmentSecret(email), "registrar", cancellationToken);
 
@@ -273,6 +276,59 @@ namespace Client_app.Services
             warnings.AddRange(identityWarnings);
             return new ManagedAccountResult(existing.Id, existing.AccountId, existing.FullName, newEmail, "registrar",
                 active ? "APPROVED" : "DEACTIVATED", active, "Registrar", ledgerRecorded,
+                warnings.Count == 0 ? null : string.Join(" ", warnings));
+        }
+
+        public async Task<ManagedAccountResult> DeleteRegistrarAsync(
+            int userId,
+            string actorEmail,
+            string? ipAddress,
+            CancellationToken cancellationToken)
+        {
+            await using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await AcquireRegistrarCapacityLockAsync(connection, transaction, cancellationToken);
+            var existing = await GetRegistrarForUpdateAsync(connection, transaction, userId, cancellationToken);
+
+            await using (var command = new NpgsqlCommand(@"
+                UPDATE users
+                SET role = 'deleted_registrar',
+                    status = 'DELETED',
+                    is_active = FALSE,
+                    password_hash = crypt(gen_random_uuid()::text, gen_salt('bf')),
+                    password_reset_token = NULL,
+                    password_reset_expires = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = @userId AND LOWER(role) = 'registrar';
+                UPDATE adminprofiles
+                SET admin_level = 'deleted_registrar'
+                WHERE user_id = @userId;", connection, transaction))
+            {
+                command.Parameters.AddWithValue("userId", userId);
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await _auditLog.LogAsync(actorEmail, "system_admin", "REGISTRAR_ACCOUNT_DELETED", "user", userId.ToString(),
+                new { existing.AccountId, existing.Email, role = "registrar", existing.Status, existing.IsActive },
+                new { existing.AccountId, existing.Email, role = "deleted_registrar", status = "DELETED", isActive = false },
+                "System Administrator deleted a Registrar account and released one Registrar slot.",
+                ipAddress, connection, transaction, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            var ledgerRecorded = await TryRecordRegistrarAuditAsync(
+                "REGISTRAR_ACCOUNT_DELETED", existing.Email, existing.AccountId, actorEmail,
+                new[] { "role", "status", "is_active", "password_hash" },
+                "System Administrator deleted a Registrar account and released one Registrar slot.", cancellationToken);
+            var warnings = new List<string>();
+            if (!ledgerRecorded) warnings.Add("The immutable audit event could not be recorded.");
+            if (!await TryRevokeFabricIdentityAsync(existing.Email, cancellationToken))
+                warnings.Add("The Registrar blockchain identity could not be revoked automatically.");
+            if (!await TryRemoveFabricWalletAsync(existing.Email, cancellationToken))
+                warnings.Add("The Registrar blockchain wallet could not be removed automatically.");
+
+            return new ManagedAccountResult(existing.Id, existing.AccountId, existing.FullName, existing.Email,
+                "deleted_registrar", "DELETED", false, "Registrar", ledgerRecorded,
                 warnings.Count == 0 ? null : string.Join(" ", warnings));
         }
 
@@ -520,6 +576,32 @@ namespace Client_app.Services
             }
         }
 
+        private static async Task EnsureRegistrarCapacityAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            CancellationToken cancellationToken)
+        {
+            await AcquireRegistrarCapacityLockAsync(connection, transaction, cancellationToken);
+            await using var command = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM users WHERE LOWER(role) = 'registrar';", connection, transaction);
+            var count = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+            if (count >= MaximumRegistrarAccounts)
+            {
+                throw new InvalidOperationException($"Only {MaximumRegistrarAccounts} Registrar accounts are allowed. Delete an existing Registrar before creating another one.");
+            }
+        }
+
+        private static async Task AcquireRegistrarCapacityLockAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            CancellationToken cancellationToken)
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT pg_advisory_xact_lock(@lockId);", connection, transaction);
+            command.Parameters.AddWithValue("lockId", RegistrarCapacityLockId);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         private static async Task EnsureEmailAvailableAsync(
             NpgsqlConnection connection,
             NpgsqlTransaction transaction,
@@ -570,7 +652,7 @@ namespace Client_app.Services
                 FROM users u
                 LEFT JOIN adminprofiles ap ON ap.user_id = u.id
                 WHERE u.id = @userId AND LOWER(u.role) = 'registrar'
-                FOR UPDATE;", connection, transaction);
+                FOR UPDATE OF u;", connection, transaction);
             command.Parameters.AddWithValue("userId", userId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))

@@ -142,6 +142,17 @@ async function bootstrapRootUser(wallet) {
         const userCheck = await dbRead.query('SELECT * FROM Users WHERE email = $1', [email]);
         let identityExists = await wallet.get(email);
 
+        if (userCheck.rows.length > 0) {
+            const account = userCheck.rows[0];
+            const isCurrentRegistrar = String(account.role || '').toLowerCase() === 'registrar' &&
+                String(account.status || '').toLowerCase() === 'approved' && account.is_active !== false;
+            if (!isCurrentRegistrar) {
+                if (identityExists) await wallet.remove(email);
+                console.log('Root registrar account is deleted or inactive. Skipping wallet bootstrap.');
+                return;
+            }
+        }
+
         // If Postgres is empty but CouchDB isn't, CouchDB has stale data. Flush it.
         if (userCheck.rows.length === 0 && identityExists) {
             console.log(`Stale wallet identity found for ${email} without DB record. Removing...`);

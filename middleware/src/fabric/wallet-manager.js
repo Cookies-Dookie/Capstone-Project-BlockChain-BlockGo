@@ -9,6 +9,11 @@ const scryptAsync = util.promisify(crypto.scrypt);
 const walletCache = new Map();
 let Wallets;
 
+const retryableCouchDbCodes = new Set([
+    'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ESOCKETTIMEDOUT',
+    'EAI_AGAIN', 'ENETDOWN', 'ENETUNREACH', 'EHOSTDOWN', 'EHOSTUNREACH'
+]);
+
 function fabricWallets() {
     if (!Wallets) ({ Wallets } = require('fabric-network'));
     return Wallets;
@@ -60,34 +65,86 @@ async function decryptPrivateKey(value, password) {
     return decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8');
 }
 
-async function getWallet(role = 'registrar') {
-    const normalized = normalizeAuthRole(role) || 'registrar';
-    if (walletCache.has(normalized)) return walletCache.get(normalized);
-    const location = walletLocation(normalized);
-    const wallet = location.url
-        ? await fabricWallets().newCouchDBWallet(location.url, `fabric_wallet_${location.suffix}`)
-        : await fabricWallets().newFileSystemWallet(path.join(middlewareRoot, 'wallet'));
+function isRetryableCouchDbError(error) {
+    const code = String(error?.code || error?.cause?.code || '').toUpperCase();
+    const status = Number(error?.statusCode || error?.status || error?.response?.status || 0);
+    const message = String(error?.message || '').toLowerCase();
+    return retryableCouchDbCodes.has(code)
+        || [408, 429, 500, 502, 503, 504].includes(status)
+        || /socket hang up|connection (?:closed|reset|refused)|network error|timed?\s*out/.test(message);
+}
+
+async function createRawWallet(role) {
+    const location = walletLocation(role);
+    return location.url
+        ? fabricWallets().newCouchDBWallet(location.url, `fabric_wallet_${location.suffix}`)
+        : fabricWallets().newFileSystemWallet(path.join(middlewareRoot, 'wallet'));
+}
+
+async function refreshWallet(state) {
+    if (!state.refreshing) {
+        state.refreshing = createRawWallet(state.role)
+            .then((wallet) => {
+                state.current = wallet;
+                return wallet;
+            })
+            .finally(() => { state.refreshing = null; });
+    }
+    return state.refreshing;
+}
+
+function resilientWallet(role, initialWallet) {
+    const state = { role, current: initialWallet, refreshing: null };
     const encryptionKey = process.env.WALLET_ENCRYPTION_KEY;
-    if (encryptionKey) {
-        const originalPut = wallet.put.bind(wallet);
-        const originalGet = wallet.get.bind(wallet);
-        wallet.put = async (label, identity) => {
-            const copy = structuredClone(identity);
-            if (copy?.credentials?.privateKey && !copy.credentials.privateKey.startsWith('ENC:')) {
-                copy.credentials.privateKey = await encryptPrivateKey(copy.credentials.privateKey, encryptionKey);
-            }
-            return originalPut(label, copy);
-        };
-        wallet.get = async (label) => {
-            const stored = await originalGet(label);
-            if (!stored) return stored;
+
+    const invoke = async (method, args, transformResult) => {
+        try {
+            const result = await state.current[method](...args);
+            return transformResult ? await transformResult(result) : result;
+        } catch (error) {
+            if (!isRetryableCouchDbError(error)) throw error;
+            const refreshed = await refreshWallet(state);
+            const result = await refreshed[method](...args);
+            return transformResult ? await transformResult(result) : result;
+        }
+    };
+
+    return {
+        get: (label) => invoke('get', [label], async (stored) => {
+            if (!stored || !encryptionKey) return stored;
             const copy = structuredClone(stored);
             if (copy?.credentials?.privateKey) copy.credentials.privateKey = await decryptPrivateKey(copy.credentials.privateKey, encryptionKey);
             return copy;
-        };
-    }
+        }),
+        put: async (label, identity) => {
+            let value = identity;
+            if (encryptionKey && identity?.credentials?.privateKey && !identity.credentials.privateKey.startsWith('ENC:')) {
+                value = structuredClone(identity);
+                value.credentials.privateKey = await encryptPrivateKey(value.credentials.privateKey, encryptionKey);
+            }
+            return invoke('put', [label, value]);
+        },
+        remove: (label) => invoke('remove', [label]),
+        list: () => invoke('list', []),
+        getProviderRegistry: () => state.current.getProviderRegistry()
+    };
+}
+
+async function getWallet(role = 'registrar') {
+    const normalized = normalizeAuthRole(role) || 'registrar';
+    if (walletCache.has(normalized)) return walletCache.get(normalized);
+    const wallet = resilientWallet(normalized, await createRawWallet(normalized));
     walletCache.set(normalized, wallet);
     return wallet;
+}
+
+async function checkWallets() {
+    const results = {};
+    for (const role of ['registrar', 'faculty', 'department_admin']) {
+        const identities = await (await getWallet(role)).list();
+        results[role] = { status: 'reachable', identities: identities.length };
+    }
+    return results;
 }
 
 async function findIdentity(username, roleHint) {
@@ -100,4 +157,4 @@ async function findIdentity(username, roleHint) {
     return null;
 }
 
-module.exports = { findIdentity, getWallet };
+module.exports = { checkWallets, findIdentity, getWallet, isRetryableCouchDbError };

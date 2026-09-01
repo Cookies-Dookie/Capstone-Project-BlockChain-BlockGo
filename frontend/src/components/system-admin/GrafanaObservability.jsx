@@ -12,7 +12,7 @@ const dashboards = [
 
 function dashboardUrl(baseUrl, uid) {
   const slug = uid.replace(/^blockgo-/, '');
-  return `${baseUrl}d/${uid}/${slug}?orgId=1&kiosk`;
+  return `${baseUrl}d/${uid}/${slug}?orgId=1&kiosk&theme=light`;
 }
 
 function GrafanaObservability() {
@@ -77,7 +77,7 @@ function GrafanaObservability() {
           key={frameUrl}
           src={frameUrl}
           title="BlockGO Grafana observability dashboards"
-          className="h-[74vh] min-h-[640px] w-full rounded-md border border-slate-300 bg-slate-950 shadow-sm"
+          className="h-[74vh] min-h-[640px] w-full rounded-md border border-slate-300 bg-white shadow-sm"
           referrerPolicy="same-origin"
         />
       )}

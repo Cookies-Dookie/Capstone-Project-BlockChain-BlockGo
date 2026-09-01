@@ -6,7 +6,7 @@ const createLogger = require('../shared/logger');
 const { normalizeAuthRole } = require('../shared/roles');
 const { createServiceApp, installErrorHandler, listen } = require('../shared/service-app');
 const { adminUser, cacheStats, enrollIdentity, ensureAdminEnrolled, registerIdentity, registrationPayload } = require('../fabric/ca-manager');
-const { getWallet } = require('../fabric/wallet-manager');
+const { checkWallets, getWallet } = require('../fabric/wallet-manager');
 
 const serviceName = 'fabric-identity-service';
 const logger = createLogger(serviceName);
@@ -127,9 +127,9 @@ app.delete('/api/wallet/:username', authenticate, requireRegistrarOrInternal, as
 
 app.get('/api/ready', async (req, res) => {
     try {
-        await Promise.all(['registrar', 'faculty', 'department_admin'].map(getWallet));
+        const wallets = await checkWallets();
         metrics.setGauge('blockgo_ca_config_cache_entries', cacheStats().entries, 'Fabric CA configuration cache entries.');
-        res.json({ status: 'ready', wallets: 'configured' });
+        res.json({ status: 'ready', wallets });
     } catch (error) {
         res.status(503).json({ status: 'not_ready', error: error.message });
     }

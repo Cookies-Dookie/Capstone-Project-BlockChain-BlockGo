@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { resolveRoute, routeDefinitions } = require('../src/shared/route-map');
 const { normalizeAuthRole } = require('../src/shared/roles');
+const { isRetryableCouchDbError } = require('../src/fabric/wallet-manager');
 
 const expected = {
     '/api/login': 'auth', '/api/crypto/hash-password': 'auth', '/api/forgot-password': 'auth', '/api/reset-password': 'auth', '/api/bootstrap': 'auth',
@@ -28,4 +29,10 @@ test('legacy role labels normalize consistently across services', () => {
     assert.equal(normalizeAuthRole('Dept Admin'), 'department_admin');
     assert.equal(normalizeAuthRole('System Administrator'), 'system_admin');
     assert.equal(normalizeAuthRole('Instructor'), 'faculty');
+});
+
+test('CouchDB transport failures are retried without retrying authentication failures', () => {
+    assert.equal(isRetryableCouchDbError({ code: 'ECONNRESET' }), true);
+    assert.equal(isRetryableCouchDbError({ statusCode: 503 }), true);
+    assert.equal(isRetryableCouchDbError({ statusCode: 401, message: 'unauthorized' }), false);
 });

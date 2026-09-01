@@ -243,21 +243,28 @@ spec:
         - name: couchdb-local-config
           mountPath: /opt/couchdb/etc/local.d
         startupProbe:
-          tcpSocket:
+          httpGet:
+            path: /_up
             port: 5984
           periodSeconds: 5
           timeoutSeconds: 2
           failureThreshold: 60
         livenessProbe:
-          tcpSocket:
+          httpGet:
+            path: /_up
             port: 5984
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
         readinessProbe:
-          tcpSocket:
+          httpGet:
+            path: /_up
             port: 5984
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
       volumes:
       - name: couchdb-single-node-config
         configMap:
@@ -339,21 +346,28 @@ spec:
         - name: couchdb-local-config
           mountPath: /opt/couchdb/etc/local.d
         startupProbe:
-          tcpSocket:
+          httpGet:
+            path: /_up
             port: 5984
           periodSeconds: 5
           timeoutSeconds: 2
           failureThreshold: 60
         livenessProbe:
-          tcpSocket:
+          httpGet:
+            path: /_up
             port: 5984
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
         readinessProbe:
-          tcpSocket:
+          httpGet:
+            path: /_up
             port: 5984
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
       volumes:
       - name: couchdb-single-node-config
         configMap:

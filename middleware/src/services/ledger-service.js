@@ -5,7 +5,7 @@ const createLogger = require('../shared/logger');
 const { normalizeAuthRole } = require('../shared/roles');
 const { createServiceApp, installErrorHandler, listen } = require('../shared/service-app');
 const { cacheStats, checkFabricEndpoints, closeGateways, contractForUser, disconnect } = require('../fabric/gateway-manager');
-const { getWallet } = require('../fabric/wallet-manager');
+const { checkWallets } = require('../fabric/wallet-manager');
 
 const serviceName = 'ledger-service';
 const logger = createLogger(serviceName);
@@ -213,12 +213,12 @@ app.delete('/internal/gateways/:username', requireInternalKey, (req, res) => {
 
 app.get('/api/ready', async (req, res) => {
     try {
-        await Promise.all(['registrar', 'faculty', 'department_admin'].map(getWallet));
+        const wallets = await checkWallets();
         const fabric = await checkFabricEndpoints();
         const stats = cacheStats();
         metrics.setGauge('blockgo_gateway_cache_entries', stats.entries, 'Fabric Gateway cache entries.');
         metrics.setGauge('blockgo_gateway_cache_max_entries', stats.maxEntries, 'Fabric Gateway cache capacity.');
-        res.json({ status: 'ready', gatewayCache: stats, fabric });
+        res.json({ status: 'ready', gatewayCache: stats, wallets, fabric });
     } catch (error) { res.status(503).json({ status: 'not_ready', error: error.message }); }
 });
 

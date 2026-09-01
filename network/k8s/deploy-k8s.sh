@@ -113,6 +113,44 @@ apply_manifest() {
     kubectl apply -f "$manifest"
 }
 
+apply_peer_manifest() {
+    local manifest="$1"
+    local output=""
+
+    if output="$(kubectl apply -f "$manifest" 2>&1)"; then
+        echo "$output"
+        return
+    fi
+
+    echo "$output"
+    if grep -q 'StatefulSet.*is invalid: spec: Forbidden: updates to statefulset spec' <<< "$output" &&
+       ! grep -Eq '(^error:|Error from server)' <<< "$output"; then
+        echo "Existing CouchDB volume-claim settings are immutable; keeping them and applying the mutable health-probe patch."
+        return
+    fi
+
+    return 1
+}
+
+apply_couchdb_health_probes() {
+    local patch_file="./k8s/couchdb-health-probe-json-patch.json"
+    local entry=""
+    local statefulset=""
+    local namespace=""
+
+    for entry in \
+        "couchdb-registrar|plv-main-campus" \
+        "couchdb-wallet-registrar|plv-main-campus" \
+        "couchdb-faculty|plv-annex-campus" \
+        "couchdb-wallet-faculty|plv-annex-campus" \
+        "couchdb-department|plv-pubad-campus" \
+        "couchdb-wallet-department|plv-pubad-campus"; do
+        IFS='|' read -r statefulset namespace <<< "$entry"
+        kubectl patch statefulset "$statefulset" -n "$namespace" \
+            --type=json --patch-file "$patch_file"
+    done
+}
+
 apply_manifest_if_exists() {
     local manifest="$1"
     if [[ -f "$manifest" ]]; then
@@ -781,6 +819,34 @@ verify_required_application_fixes() {
         echo "ERROR: Permanent chat-cache deletion is missing."
         return 1
     }
+    grep -q 'AddHostedService<BackendKeepAliveService>' ../client-app/Program.cs || {
+        echo "ERROR: The backend-only keepalive service is not registered."
+        return 1
+    }
+    grep -q 'IntervalSeconds.*, 45' ../client-app/Services/BackendKeepAliveService.cs || {
+        echo "ERROR: The 45-second backend keepalive interval is missing."
+        return 1
+    }
+    grep -q 'MaximumRegistrarAccounts = 2' ../client-app/Services/AccountProvisioningService.cs || {
+        echo "ERROR: The two-Registrar backend limit is missing."
+        return 1
+    }
+    grep -q 'two-Registrar limit has been reached' ../frontend/src/components/system-admin/RegistrarAccountManagement.jsx || {
+        echo "ERROR: The two-Registrar frontend limit state is missing."
+        return 1
+    }
+    grep -q 'Network and Docker Issues' ../client-app/Controllers/SupportTicketsController.cs || {
+        echo "ERROR: The fixed support-specialist choices are missing."
+        return 1
+    }
+    grep -q 'Notice - (' ../client-app/Controllers/SupportTicketsController.cs || {
+        echo "ERROR: The System Admin support broadcast format is missing."
+        return 1
+    }
+    grep -q 'GF_USERS_DEFAULT_THEME' ../monitoring/observability-stack.yaml || {
+        echo "ERROR: Grafana light-mode configuration is missing."
+        return 1
+    }
     grep -q 'chat_conversation_states' ../migrations/006_chat_conversation_states.sql || {
         echo "ERROR: Migration 006 for chat conversation state is missing or invalid."
         return 1
@@ -789,7 +855,10 @@ verify_required_application_fixes() {
         echo "ERROR: Migration 007 for group chats is missing or invalid."
         return 1
     }
-
+    grep -q 'assigned_specialist' ../migrations/008_support_ticket_specialist_assignments.sql || {
+        echo "ERROR: Migration 008 for ticket specialties is missing or invalid."
+        return 1
+    }
     echo "Required grade, timestamp, password-reset, Registrar, and chat fixes are present."
 }
 
@@ -903,6 +972,8 @@ verify_deployment_inputs() {
     for required_file in \
         ../migrations/006_chat_conversation_states.sql \
         ../migrations/007_group_chats.sql \
+        ../migrations/008_support_ticket_specialist_assignments.sql \
+        ./k8s/couchdb-health-probe-json-patch.json \
         ../monitoring/grafana-dashboard.json \
         ../monitoring/grafana-kubernetes-memory.json \
         ../monitoring/grafana-api-observability.json \
@@ -1149,9 +1220,10 @@ configure_peer_channel_endpoint_aliases() {
     apply_manifest "$TMP_K8S_DIR/05-fabric-ca.yaml"
     deploy_orderers_sequentially
     configure_orderer_channel_endpoint_aliases
-    apply_manifest "$TMP_K8S_DIR/07-peer-registrar.yaml"
-    apply_manifest "$TMP_K8S_DIR/07-peer-faculty.yaml"
-    apply_manifest "$TMP_K8S_DIR/07-peer-department.yaml"
+    apply_peer_manifest "$TMP_K8S_DIR/07-peer-registrar.yaml"
+    apply_peer_manifest "$TMP_K8S_DIR/07-peer-faculty.yaml"
+    apply_peer_manifest "$TMP_K8S_DIR/07-peer-department.yaml"
+    apply_couchdb_health_probes
     configure_peer_channel_endpoint_aliases
     apply_manifest "$TMP_K8S_DIR/08-middleware-api.yaml"
     apply_manifest "$TMP_K8S_DIR/09-ipfs.yaml"
@@ -1237,8 +1309,11 @@ wait_deployments() {
     wait_rollout deployment/orderer-1 plv-main-campus
     wait_rollout deployment/orderer-2 plv-main-campus
     wait_rollout deployment/orderer-3 plv-annex-campus
+    wait_rollout statefulset/couchdb-registrar plv-main-campus
     wait_rollout statefulset/couchdb-wallet-registrar plv-main-campus
+    wait_rollout statefulset/couchdb-faculty plv-annex-campus
     wait_rollout statefulset/couchdb-wallet-faculty plv-annex-campus
+    wait_rollout statefulset/couchdb-department plv-pubad-campus
     wait_rollout statefulset/couchdb-wallet-department plv-pubad-campus
     wait_rollout deployment/peer-registrar plv-main-campus
     wait_rollout deployment/peer-faculty plv-annex-campus
@@ -1283,6 +1358,10 @@ verify_deployed_application_revision() {
         echo "ERROR: Migration 007 is absent from the deployed migration ConfigMap."
         return 1
     }
+    grep -q '008_support_ticket_specialist_assignments.sql' <<< "$migration_config" || {
+        echo "ERROR: Migration 008 is absent from the deployed migration ConfigMap."
+        return 1
+    }
 
     local migration_logs
     migration_logs="$(kubectl logs job/postgres-schema-migrations -n plv-main-campus --all-containers=true)"
@@ -1292,6 +1371,10 @@ verify_deployed_application_revision() {
     }
     grep -q 'Applying 007_group_chats.sql' <<< "$migration_logs" || {
         echo "ERROR: Migration 007 was not observed in the completed migration Job."
+        return 1
+    }
+    grep -q 'Applying 008_support_ticket_specialist_assignments.sql' <<< "$migration_logs" || {
+        echo "ERROR: Migration 008 was not observed in the completed migration Job."
         return 1
     }
 
@@ -1338,12 +1421,45 @@ verify_deployed_application_revision() {
         return 1
     fi
     kubectl exec "$frontend_pod" -n plv-fabric -- sh -ec \
-        "grep -R -q 'Group invitations' /usr/share/nginx/html/static/js && grep -R -q 'Permanently delete every message' /usr/share/nginx/html/static/js" || {
-        echo "ERROR: The deployed frontend bundle does not contain the required chat features."
+        "grep -R -q 'Group invitations' /usr/share/nginx/html/static/js && \
+         grep -R -q 'Permanently delete every message' /usr/share/nginx/html/static/js && \
+         grep -R -q 'two-Registrar limit has been reached' /usr/share/nginx/html/static/js && \
+         grep -R -q 'Delete Registrar' /usr/share/nginx/html/static/js && \
+         grep -R -q 'Network and Docker Issues' /usr/share/nginx/html/static/js && \
+         grep -R -q 'kiosk&theme=light' /usr/share/nginx/html/static/js && \
+         ! grep -R -q 'Service Health' /usr/share/nginx/html/static/js && \
+         ! grep -R -q 'Platform Services' /usr/share/nginx/html/static/js" || {
+        echo "ERROR: The deployed frontend bundle does not contain all required administration, support, chat, and Grafana changes."
         return 1
     }
 
-    echo "All custom deployments, the frontend bundle, and chat migrations match this source revision."
+    local grafana_theme
+    grafana_theme="$(kubectl get deployment grafana -n plv-fabric -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="GF_USERS_DEFAULT_THEME")].value}')"
+    if [[ "$grafana_theme" != "light" ]]; then
+        echo "ERROR: The deployed Grafana default theme is ${grafana_theme:-unset}, expected light."
+        return 1
+    fi
+
+    local couchdb_entry
+    local couchdb_statefulset
+    local couchdb_namespace
+    local couchdb_probe_path
+    for couchdb_entry in \
+        "couchdb-registrar|plv-main-campus" \
+        "couchdb-wallet-registrar|plv-main-campus" \
+        "couchdb-faculty|plv-annex-campus" \
+        "couchdb-wallet-faculty|plv-annex-campus" \
+        "couchdb-department|plv-pubad-campus" \
+        "couchdb-wallet-department|plv-pubad-campus"; do
+        IFS='|' read -r couchdb_statefulset couchdb_namespace <<< "$couchdb_entry"
+        couchdb_probe_path="$(kubectl get statefulset "$couchdb_statefulset" -n "$couchdb_namespace" -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}')"
+        if [[ "$couchdb_probe_path" != "/_up" ]]; then
+            echo "ERROR: ${couchdb_namespace}/${couchdb_statefulset} does not use the authenticated CouchDB /_up readiness probe."
+            return 1
+        fi
+    done
+
+    echo "All custom deployments, migrations, CouchDB probes, frontend features, and Grafana settings match this source revision."
 }
 
 bootstrap_application_accounts() {

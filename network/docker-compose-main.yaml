@@ -90,31 +90,43 @@ services:
   couchdb_registrar:
     image: couchdb:3.2.2
     container_name: couchdb_registrar
+    restart: unless-stopped
     environment:
       - COUCHDB_USER=${COUCHDB_USER}
       - COUCHDB_PASSWORD=${COUCHDB_PASS}
       - COUCHDB_SINGLE_NODE=true
     ports: ["5985:5984"]
     networks: [registrar-net]
+    healthcheck: &couchdb-health
+      test: ["CMD-SHELL", "curl -fsS -u \"$${COUCHDB_USER}:$${COUCHDB_PASSWORD}\" http://127.0.0.1:5984/_up >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
 
   couchdb_registrar_peer1:
     image: couchdb:3.2.2
     container_name: couchdb_registrar_peer1
+    restart: unless-stopped
     environment:
       - COUCHDB_USER=${COUCHDB_USER}
       - COUCHDB_PASSWORD=${COUCHDB_PASS}
       - COUCHDB_SINGLE_NODE=true
     ports: ["5986:5984"]
     networks: [registrar-net]
+    healthcheck: *couchdb-health
 
   couchdb_wallet_registrar:
     image: couchdb:3.2.2
     container_name: couchdb_wallet_registrar
+    restart: unless-stopped
     environment:
       - COUCHDB_USER=${COUCHDB_USER}
       - COUCHDB_PASSWORD=${COUCHDB_PASS}
+      - COUCHDB_SINGLE_NODE=true
     ports: ["5990:5984"]
     networks: [registrar-net]
+    healthcheck: *couchdb-health
 
   peer0.registrar.capstone.com:
     container_name: peer0.registrar.capstone.com
@@ -149,7 +161,8 @@ services:
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - ./crypto-config-final-v2:/etc/hyperledger/fabric/crypto-config-final-v2
       - ./builders:/opt/builders
-    depends_on: [couchdb_registrar]
+    depends_on:
+      couchdb_registrar: { condition: service_healthy }
 
   peer1.registrar.capstone.com:
     container_name: peer1.registrar.capstone.com
@@ -184,7 +197,8 @@ services:
       - ./config/core.yaml:/etc/hyperledger/fabric/core.yaml
       - ./crypto-config-final-v2:/etc/hyperledger/fabric/crypto-config-final-v2
       - ./builders:/opt/builders
-    depends_on: [couchdb_registrar_peer1]
+    depends_on:
+      couchdb_registrar_peer1: { condition: service_healthy }
 
   ipfs0:
     image: ipfs/kubo:latest
@@ -370,7 +384,7 @@ services:
     volumes:
       - ./fabric-ca:/network/fabric-ca:ro
     depends_on:
-      couchdb_wallet_registrar: { condition: service_started }
+      couchdb_wallet_registrar: { condition: service_healthy }
 
   ledger-service:
     <<: *middleware-common
@@ -382,7 +396,7 @@ services:
       - ./crypto-config-final-v2/peerOrganizations/department.capstone.com/peers/peer0.department.capstone.com/tls/ca.crt:/etc/hyperledger/fabric-gateway-tls/department-peer-ca.crt:ro
       - ./crypto-config-final-v2/ordererOrganizations/capstone.com/orderers/orderer.capstone.com/tls/ca.crt:/etc/hyperledger/fabric-gateway-tls/orderer-ca.crt:ro
     depends_on:
-      couchdb_wallet_registrar: { condition: service_started }
+      couchdb_wallet_registrar: { condition: service_healthy }
 
   grade-upload-service:
     <<: *middleware-common

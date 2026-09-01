@@ -224,6 +224,7 @@ const Chat = ({
   onUnreadChange,
   onIncomingMessage,
   onRegistrationRequest,
+  onSupportNotice,
   autoOpenTarget,
 }) => {
   const [connection, setConnection] = useState(null);
@@ -540,6 +541,11 @@ const Chat = ({
       window.dispatchEvent(new CustomEvent('blockgo:system-setting-changed', { detail: payload }));
     });
 
+    conn.on('SupportNotice', (payload) => {
+      console.log('[Chat] SupportNotice:', payload);
+      onSupportNotice?.(payload);
+    });
+
     conn.on('AcademicDataChanged', (payload) => {
       console.log('[Chat] AcademicDataChanged:', payload);
       pullSharedClientState()
@@ -723,7 +729,7 @@ const Chat = ({
       setConnection(null);
       conn.stop();
     };
-  }, [userEmail, userRole, onIncomingMessage, onRegistrationRequest, isConversationReadable, markConversationSeen, applyConversationState, loadConversationStates, loadGroupChatData]);
+  }, [userEmail, userRole, onIncomingMessage, onRegistrationRequest, onSupportNotice, isConversationReadable, markConversationSeen, applyConversationState, loadConversationStates, loadGroupChatData]);
 
   // Load history when selected user changes
   useEffect(() => {

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { createSupportTicket, fetchSupportTickets } from '../../services/api';
+import { createSupportTicket, fetchSupportSpecialists, fetchSupportTickets } from '../../services/api';
+import SupportAssignmentSelect, { assignmentPayload } from '../shared/SupportAssignmentSelect';
 
-const initialForm = { title: '', description: '', severity: 'NORMAL' };
+const initialForm = { title: '', description: '', severity: 'NORMAL', assignment: '' };
 const severityStyles = { LOW: 'bg-emerald-500', NORMAL: 'bg-blue-500', HIGH: 'bg-red-500' };
 
 const Icon = ({ children, className = 'h-4 w-4' }) => (
@@ -10,6 +11,7 @@ const Icon = ({ children, className = 'h-4 w-4' }) => (
 
 const RegistrarSupportTickets = () => {
   const [tickets, setTickets] = useState([]);
+  const [specialists, setSpecialists] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -20,8 +22,9 @@ const RegistrarSupportTickets = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetchSupportTickets();
-      setTickets(Array.isArray(response?.data) ? response.data : []);
+      const [ticketResponse, specialistResponse] = await Promise.all([fetchSupportTickets(), fetchSupportSpecialists()]);
+      setTickets(Array.isArray(ticketResponse?.data) ? ticketResponse.data : []);
+      setSpecialists(Array.isArray(specialistResponse?.data) ? specialistResponse.data : []);
     } catch (error) {
       setNotice({ type: 'error', message: error.message });
     } finally {
@@ -33,10 +36,20 @@ const RegistrarSupportTickets = () => {
 
   const submit = async (event) => {
     event.preventDefault();
+    const assignment = assignmentPayload(form.assignment);
+    if (!assignment) {
+      setNotice({ type: 'error', message: 'Select the support specialist who should receive this ticket.' });
+      return;
+    }
     setSaving(true);
     setNotice(null);
     try {
-      await createSupportTicket(form);
+      await createSupportTicket({
+        title: form.title,
+        description: form.description,
+        severity: form.severity,
+        ...assignment,
+      });
       setForm(initialForm);
       setFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -82,6 +95,10 @@ const RegistrarSupportTickets = () => {
             <textarea required minLength="10" maxLength="5000" rows="4" placeholder="Describe the error and the steps that caused it. Include any relevant details." value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} className="mt-1.5 w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-xs font-normal outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
           </label>
 
+          <label className="block text-xs font-semibold text-slate-700">Support Specialist <span className="text-red-500">*</span>
+            <SupportAssignmentSelect value={form.assignment} onChange={(assignment) => setForm({ ...form, assignment })} specialists={specialists} className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-normal outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100" ariaLabel="Support specialist" />
+          </label>
+
           <div className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-start gap-3">
               <Icon className="mt-0.5 h-4 w-4 shrink-0 text-slate-500"><path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.6 9.6a2 2 0 0 1-2.8-2.8l8.9-8.9" /></Icon>
@@ -102,7 +119,7 @@ const RegistrarSupportTickets = () => {
         </div>
 
         {loading ? <p className="rounded-lg border border-slate-200 bg-slate-50 py-12 text-center text-sm text-slate-500">Loading tickets…</p> : <div className="space-y-3">
-          {tickets.map((ticket) => <article key={ticket.ticketId} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold text-slate-800">#{ticket.ticketId} · {ticket.title}</h3><span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-800">{ticket.status}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">{ticket.description}</p><p className="mt-2 text-xs text-slate-500">{ticket.severity} · {new Date(ticket.createdAt).toLocaleString()}</p>{ticket.adminResponse && <div className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800"><strong>System Administrator:</strong> {ticket.adminResponse}</div>}</article>)}
+          {tickets.map((ticket) => <article key={ticket.ticketId} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold text-slate-800">#{ticket.ticketId} · {ticket.title}</h3><span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-800">{ticket.status}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">{ticket.description}</p><p className="mt-2 text-xs text-slate-500">{ticket.severity} · {new Date(ticket.createdAt).toLocaleString()}</p>{ticket.assignedSpecialistLabel && <p className="mt-2 text-xs font-semibold text-indigo-700">Assigned to: {ticket.assignedSpecialistLabel}</p>}{ticket.adminResponse && <div className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800"><strong>System Administrator:</strong> {ticket.adminResponse}</div>}</article>)}
           {tickets.length === 0 && <div className="flex min-h-20 items-center justify-center rounded-md border border-slate-200 bg-slate-50/70 px-5 py-5 text-center"><div><Icon className="mx-auto h-7 w-7 text-blue-200"><path d="M4 7h5l2 2h9v10H4Z" /><path d="m14 6 4-2-1 4" /></Icon><p className="mt-1.5 text-xs font-bold text-slate-700">No support tickets submitted yet.</p><p className="mt-0.5 text-[10px] text-slate-500">When you submit a ticket, it will appear here.</p></div></div>}
         </div>}
       </section>
