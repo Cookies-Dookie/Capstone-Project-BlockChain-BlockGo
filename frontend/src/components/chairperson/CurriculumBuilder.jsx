@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { addCurriculumSubject, createCurriculum, fetchAcademicPrograms, fetchCurriculums, removeCurriculumSubject, submitCurriculum, updateCurriculum, updateCurriculumSubject } from '../../services/api';
 
 const emptyCurriculum = { programCode: '', curriculumCode: '', curriculumName: '', curriculumVersion: '', schoolYear: '' };
 const emptySubject = { subjectCode: '', subjectTitle: '', units: 3, lectureHours: 3, laboratoryHours: 0, prerequisite: '', yearLevel: 1, semester: 'FIRST', subjectType: '' };
-const yearLabels = { 1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year' };
-const semesterLabels = { FIRST: 'First Semester', SECOND: 'Second Semester', MIDYEAR: 'Summer / Midyear' };
+const years = { 1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year' };
+const semesters = { FIRST: '1st Semester', SECOND: '2nd Semester', MIDYEAR: 'Summer / Midyear' };
+const inputClass = 'mt-1 h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs outline-none focus:border-blue-700 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100';
+const localCurriculumKey = 'blockgo-local-chairperson-curriculum';
 
 const CurriculumBuilder = ({ department = '' }) => {
   const [programs, setPrograms] = useState([]);
@@ -12,74 +14,166 @@ const CurriculumBuilder = ({ department = '' }) => {
   const [selectedId, setSelectedId] = useState('');
   const [curriculumForm, setCurriculumForm] = useState(emptyCurriculum);
   const [subjectForm, setSubjectForm] = useState(emptySubject);
-  const [editingSubjectId, setEditingSubjectId] = useState(null);
-  const [activeYear, setActiveYear] = useState(1);
+  const [editingId, setEditingId] = useState(null);
+  const [mode, setMode] = useState('manual');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [preview, setPreview] = useState(false);
+  const [uploadName, setUploadName] = useState('');
+  const [prerequisiteOpen, setPrerequisiteOpen] = useState(false);
+  const [prerequisiteSearch, setPrerequisiteSearch] = useState('');
+  const fileRef = useRef(null);
+  const isLocalMode = localStorage.getItem('token')?.endsWith('.local-dev');
+
+  const saveLocalCurriculum = (curriculum) => {
+    localStorage.setItem(localCurriculumKey, JSON.stringify(curriculum));
+    setCurricula([curriculum]);
+    setSelectedId(String(curriculum.curriculumId));
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [programResponse, curriculumResponse] = await Promise.all([fetchAcademicPrograms(), fetchCurriculums()]);
-      const availablePrograms = Array.isArray(programResponse?.data) ? programResponse.data : [];
-      const availableCurricula = Array.isArray(curriculumResponse?.data) ? curriculumResponse.data : [];
-      const normalizedDepartment = department.trim().toLowerCase();
-      const ownedPrograms = normalizedDepartment
-        ? availablePrograms.filter((program) => program.programName.toLowerCase() === normalizedDepartment || program.programCode.toLowerCase() === normalizedDepartment)
-        : availablePrograms;
-      setPrograms(ownedPrograms); setCurricula(availableCurricula);
-      setSelectedId((current) => current || String(availableCurricula[0]?.curriculumId || ''));
-      setCurriculumForm((current) => ({ ...current, programCode: current.programCode || ownedPrograms[0]?.programCode || '' }));
-    } catch (error) { setNotice({ type: 'error', message: error.message }); }
+      const [programResult, curriculumResult] = await Promise.all([fetchAcademicPrograms(), fetchCurriculums()]);
+      const allPrograms = Array.isArray(programResult?.data) ? programResult.data : [];
+      const allCurricula = Array.isArray(curriculumResult?.data) ? curriculumResult.data : [];
+      const normalized = department.trim().toLowerCase();
+      const owned = normalized ? allPrograms.filter((item) => item.programName.toLowerCase() === normalized || item.programCode.toLowerCase() === normalized) : allPrograms;
+      setPrograms(owned); setCurricula(allCurricula);
+      setSelectedId((current) => current || String(allCurricula[0]?.curriculumId || ''));
+      setCurriculumForm((current) => ({ ...current, programCode: current.programCode || owned[0]?.programCode || '' }));
+    } catch (error) {
+      if (isLocalMode) {
+        const fallbackProgram = { programId: 'local-bsit', programCode: 'BSIT', programName: department || 'College of Information Technology and Engineering' };
+        const saved = JSON.parse(localStorage.getItem(localCurriculumKey) || 'null');
+        const fallbackCurriculum = saved || { curriculumId: 'local-draft', programCode: 'BSIT', curriculumCode: 'BSIT-2026', curriculumName: 'BSIT Curriculum 2026', curriculumVersion: '1.0', schoolYear: '2025-2026', status: 'DRAFT', subjects: [], totalUnits: 0 };
+        setPrograms([fallbackProgram]); setCurricula([fallbackCurriculum]); setSelectedId(String(fallbackCurriculum.curriculumId));
+        setCurriculumForm((current) => ({ ...current, programCode: 'BSIT' }));
+        setNotice({ type: 'success', message: 'Local curriculum workspace loaded.' });
+      } else setNotice({ type: 'error', message: error.message });
+    }
     finally { setLoading(false); }
-  }, [department]);
+  }, [department, isLocalMode]);
+
   useEffect(() => { load(); }, [load]);
 
-  const selected = curricula.find((curriculum) => String(curriculum.curriculumId) === String(selectedId));
+  const selected = curricula.find((item) => String(item.curriculumId) === String(selectedId));
   const editable = selected && ['DRAFT', 'RETURNED'].includes(selected.status);
-  const subjects = selected?.subjects || [];
+  const subjects = useMemo(() => selected?.subjects || [], [selected]);
+  const visibleSubjects = subjects.filter((item) => `${item.subjectCode} ${item.subjectTitle}`.toLowerCase().includes(search.toLowerCase()));
+  const totalUnits = subjects.reduce((sum, item) => sum + Number(item.units || 0), 0);
+  const prerequisiteOptions = subjects.filter((item) => item.subjectId !== editingId && (Number(item.yearLevel) < Number(subjectForm.yearLevel) || (Number(item.yearLevel) === Number(subjectForm.yearLevel) && item.semester === 'FIRST' && subjectForm.semester !== 'FIRST')));
+  const selectedPrerequisites = subjectForm.prerequisite ? subjectForm.prerequisite.split(';').map((item) => item.trim()).filter(Boolean) : [];
+  const filteredPrerequisites = prerequisiteOptions.filter((item) => `${item.subjectCode} ${item.subjectTitle}`.toLowerCase().includes(prerequisiteSearch.toLowerCase()));
+  const togglePrerequisite = (code) => {
+    const next = selectedPrerequisites.includes(code) ? selectedPrerequisites.filter((item) => item !== code) : [...selectedPrerequisites, code];
+    setSubjectForm((current) => ({ ...current, prerequisite: next.join('; ') }));
+  };
+  const updateSelected = (field, value) => setCurricula((current) => current.map((item) => item.curriculumId === selected.curriculumId ? { ...item, [field]: value } : item));
 
   const create = async (event) => {
     event.preventDefault(); setSaving(true); setNotice(null);
-    try { const response = await createCurriculum(curriculumForm); setNotice({ type: 'success', message: 'Curriculum draft created.' }); setCurriculumForm((current) => ({ ...emptyCurriculum, programCode: current.programCode })); await load(); setSelectedId(String(response?.data?.curriculumId || '')); }
+    try { const result = await createCurriculum(curriculumForm); await load(); setSelectedId(String(result?.data?.curriculumId || '')); setNotice({ type: 'success', message: 'Curriculum created.' }); }
     catch (error) { setNotice({ type: 'error', message: error.message }); }
     finally { setSaving(false); }
   };
 
   const saveMetadata = async () => {
-    if (!selected) return;
-    setSaving(true); setNotice(null);
-    try { await updateCurriculum(selected.curriculumId, { curriculumCode: selected.curriculumCode, curriculumName: selected.curriculumName, curriculumVersion: selected.curriculumVersion, schoolYear: selected.schoolYear }); setNotice({ type: 'success', message: 'Draft metadata saved.' }); await load(); }
+    if (!selected) return; setSaving(true); setNotice(null);
+    if (isLocalMode) { saveLocalCurriculum(selected); setNotice({ type: 'success', message: 'Changes saved locally.' }); setSaving(false); return; }
+    try { await updateCurriculum(selected.curriculumId, { curriculumCode: selected.curriculumCode, curriculumName: selected.curriculumName, curriculumVersion: selected.curriculumVersion, schoolYear: selected.schoolYear }); await load(); setNotice({ type: 'success', message: 'Changes saved.' }); }
     catch (error) { setNotice({ type: 'error', message: error.message }); }
     finally { setSaving(false); }
   };
 
   const saveSubject = async (event) => {
-    event.preventDefault(); if (!selected) return;
+    event.preventDefault(); if (!selected) return; setSaving(true); setNotice(null);
+    if (isLocalMode) {
+      const nextSubject = { ...subjectForm, subjectId: editingId || `local-subject-${Date.now()}` };
+      const nextSubjects = editingId ? subjects.map((item) => item.subjectId === editingId ? nextSubject : item) : [...subjects, nextSubject];
+      saveLocalCurriculum({ ...selected, subjects: nextSubjects, totalUnits: nextSubjects.reduce((sum, item) => sum + Number(item.units || 0), 0) });
+      setSubjectForm(emptySubject); setEditingId(null); setSaving(false); setNotice({ type: 'success', message: editingId ? 'Subject updated.' : 'Subject added.' }); return;
+    }
+    try { if (editingId) await updateCurriculumSubject(selected.curriculumId, editingId, subjectForm); else await addCurriculumSubject(selected.curriculumId, subjectForm); setSubjectForm(emptySubject); setEditingId(null); await load(); setNotice({ type: 'success', message: editingId ? 'Subject updated.' : 'Subject added.' }); }
+    catch (error) { setNotice({ type: 'error', message: error.message }); }
+    finally { setSaving(false); }
+  };
+
+  const editSubject = (item) => {
+    setMode('manual'); setEditingId(item.subjectId);
+    setSubjectForm({ subjectCode: item.subjectCode, subjectTitle: item.subjectTitle, units: item.units, lectureHours: item.lectureHours, laboratoryHours: item.laboratoryHours, prerequisite: item.prerequisite || '', yearLevel: item.yearLevel, semester: item.semester, subjectType: item.subjectType || '' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const deleteSubject = async (item) => {
+    if (!window.confirm(`Remove ${item.subjectCode} from this curriculum?`)) return;
+    if (isLocalMode) { const nextSubjects = subjects.filter((subject) => subject.subjectId !== item.subjectId); saveLocalCurriculum({ ...selected, subjects: nextSubjects, totalUnits: nextSubjects.reduce((sum, subject) => sum + Number(subject.units || 0), 0) }); setNotice({ type: 'success', message: 'Subject removed.' }); return; }
+    try { await removeCurriculumSubject(selected.curriculumId, item.subjectId); await load(); setNotice({ type: 'success', message: 'Subject removed.' }); }
+    catch (error) { setNotice({ type: 'error', message: error.message }); }
+  };
+
+  const submit = async () => {
+    if (!editable || selected.status !== 'DRAFT') return setNotice({ type: 'error', message: 'Save the curriculum before submitting it.' });
+    if (!window.confirm('Submit this curriculum to the Registrar for review?')) return;
+    if (isLocalMode) { saveLocalCurriculum({ ...selected, status: 'PENDING_APPROVAL' }); setNotice({ type: 'success', message: 'Curriculum submitted for review locally.' }); return; }
+    setSaving(true); try { await submitCurriculum(selected.curriculumId); await load(); setNotice({ type: 'success', message: 'Curriculum submitted for Registrar review.' }); }
+    catch (error) { setNotice({ type: 'error', message: error.message }); } finally { setSaving(false); }
+  };
+
+  const downloadTemplate = () => {
+    const data = 'Year Level,Semester,Course Code,Course Title,Units,Prerequisite(s)\n1,FIRST,IT 101,Introduction to Computing,3,\n';
+    const url = URL.createObjectURL(new Blob([data], { type: 'text/csv' })); const link = document.createElement('a'); link.href = url; link.download = 'curriculum-template.csv'; link.click(); URL.revokeObjectURL(url);
+  };
+
+  const importCsv = async (file) => {
+    setUploadName(file?.name || ''); if (!file || !selected || !editable) return;
     setSaving(true); setNotice(null);
     try {
-      if (editingSubjectId) await updateCurriculumSubject(selected.curriculumId, editingSubjectId, subjectForm);
-      else await addCurriculumSubject(selected.curriculumId, subjectForm);
-      setNotice({ type: 'success', message: editingSubjectId ? 'Subject updated.' : 'Subject added.' }); setSubjectForm({ ...emptySubject, yearLevel: activeYear }); setEditingSubjectId(null); await load();
+      const rows = (await file.text()).split(/\r?\n/).filter(Boolean).slice(1).map((line) => line.split(',').map((cell) => cell.trim())).filter((row) => row.length >= 5);
+      if (!rows.length) throw new Error('No valid subject rows were found.');
+      for (const row of rows) await addCurriculumSubject(selected.curriculumId, { ...emptySubject, yearLevel: Number(row[0]), semester: row[1].toUpperCase(), subjectCode: row[2], subjectTitle: row[3], units: Number(row[4]), prerequisite: row[5] || '' });
+      await load(); setNotice({ type: 'success', message: `${rows.length} subjects imported successfully.` });
     } catch (error) { setNotice({ type: 'error', message: error.message }); }
     finally { setSaving(false); }
   };
 
-  const editSubject = (subject) => { setActiveYear(Number(subject.yearLevel)); setEditingSubjectId(subject.subjectId); setSubjectForm({ subjectCode: subject.subjectCode, subjectTitle: subject.subjectTitle, units: subject.units, lectureHours: subject.lectureHours, laboratoryHours: subject.laboratoryHours, prerequisite: subject.prerequisite || '', yearLevel: subject.yearLevel, semester: subject.semester, subjectType: subject.subjectType || '' }); };
-  const removeSubject = async (subject) => { if (!window.confirm(`Remove ${subject.subjectCode} from this draft?`)) return; try { await removeCurriculumSubject(selected.curriculumId, subject.subjectId); setNotice({ type: 'success', message: 'Subject removed.' }); await load(); } catch (error) { setNotice({ type: 'error', message: error.message }); } };
-  const submit = async () => { if (selected?.status !== 'DRAFT') { setNotice({ type: 'error', message: 'Revise and save the returned curriculum before resubmitting it.' }); return; } if (!window.confirm('Submit this curriculum to the Registrar? Editing will be locked until it is returned.')) return; setSaving(true); try { await submitCurriculum(selected.curriculumId); setNotice({ type: 'success', message: 'Curriculum submitted for Registrar approval.' }); await load(); } catch (error) { setNotice({ type: 'error', message: error.message }); } finally { setSaving(false); } };
-  const updateSelected = (field, value) => setCurricula((current) => current.map((curriculum) => curriculum.curriculumId === selected.curriculumId ? { ...curriculum, [field]: value } : curriculum));
-  const prerequisiteOptions = useMemo(() => subjects.filter((subject) => subject.subjectId !== editingSubjectId), [subjects, editingSubjectId]);
-  const activeYearTotal = subjects.filter((subject) => Number(subject.yearLevel) === activeYear).reduce((sum, subject) => sum + Number(subject.units), 0);
+  return <div className="space-y-3 text-[13px] text-[#102a56]">
+    <header className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-xl font-bold">Curriculum Checklist</h1><p className="mt-0.5 text-xs text-slate-500">Create and manage the curriculum checklist for your program.</p></div><button onClick={downloadTemplate} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold shadow-sm">⇩&nbsp; Download Template</button></header>
+    {notice && <div className={`flex justify-between rounded-lg border px-4 py-3 text-sm ${notice.type === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice.message}</span><button onClick={() => setNotice(null)}>×</button></div>}
+    <div className="flex border-b border-slate-200">{[['manual', 'Create Manually'], ['bulk', 'Bulk Upload']].map(([id, label]) => <button key={id} onClick={() => setMode(id)} className={`border-b-2 px-4 py-2 text-xs font-semibold ${mode === id ? 'border-blue-700 text-blue-700' : 'border-transparent text-slate-600'}`}>{label}</button>)}</div>
 
-  return <div className="space-y-6">
-    {notice ? <div className={`rounded-lg p-3 text-sm ${notice.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'}`}>{notice.message}</div> : null}
-    {selected ? <div className="rounded-lg bg-blue-50 px-4 py-3 text-sm font-bold text-[#003366]">{yearLabels[activeYear]} Total Units: {activeYearTotal}</div> : null}
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-xl font-bold text-[#003366]">Create Curriculum Proposal</h2><p className="mb-4 mt-1 text-sm text-slate-500">Your assigned program is validated by the server. Registrar approval is mandatory before publication.</p><form onSubmit={create} className="grid gap-3 md:grid-cols-2 xl:grid-cols-5"><select required value={curriculumForm.programCode} onChange={(e) => setCurriculumForm({ ...curriculumForm, programCode: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2"><option value="">Select program</option>{programs.map((program) => <option key={program.programId} value={program.programCode}>{program.programCode} — {program.programName}</option>)}</select><input required placeholder="Curriculum code" value={curriculumForm.curriculumCode} onChange={(e) => setCurriculumForm({ ...curriculumForm, curriculumCode: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2" /><input required placeholder="Curriculum name" value={curriculumForm.curriculumName} onChange={(e) => setCurriculumForm({ ...curriculumForm, curriculumName: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2" /><input required placeholder="Version, e.g. BSIT-2026" value={curriculumForm.curriculumVersion} onChange={(e) => setCurriculumForm({ ...curriculumForm, curriculumVersion: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2" /><div className="flex gap-2"><input placeholder="School year" value={curriculumForm.schoolYear} onChange={(e) => setCurriculumForm({ ...curriculumForm, schoolYear: e.target.value })} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2" /><button disabled={saving} className="rounded-lg bg-[#003366] px-4 py-2 font-bold text-white">Create</button></div></form></section>
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">{loading ? <p className="py-8 text-center text-slate-500">Loading curriculum proposals…</p> : curricula.length === 0 ? <p className="py-8 text-center text-slate-500">No curriculum proposal exists for your program yet.</p> : <><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2">{curricula.map((curriculum) => <option key={curriculum.curriculumId} value={curriculum.curriculumId}>{curriculum.curriculumVersion} — {curriculum.status}</option>)}</select><span className={`rounded-full px-3 py-1 text-xs font-bold ${editable ? 'bg-blue-100 text-blue-800' : 'bg-slate-200 text-slate-700'}`}>{selected?.status}</span></div>{selected?.registrarComment ? <div className="mb-4 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-4"><p className="font-bold text-amber-900">Registrar Comment</p><p className="text-sm text-amber-800">{selected.registrarComment}</p></div> : null}<div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><input disabled={!editable} value={selected?.curriculumCode || ''} onChange={(e) => updateSelected('curriculumCode', e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100" /><input disabled={!editable} value={selected?.curriculumName || ''} onChange={(e) => updateSelected('curriculumName', e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100" /><input disabled={!editable} value={selected?.curriculumVersion || ''} onChange={(e) => updateSelected('curriculumVersion', e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100" /><div className="flex gap-2"><input disabled={!editable} value={selected?.schoolYear || ''} onChange={(e) => updateSelected('schoolYear', e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100" />{editable ? <button type="button" onClick={saveMetadata} className="rounded-lg bg-slate-700 px-3 py-2 text-sm font-bold text-white">Save</button> : null}</div></div><div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">{[1, 2, 3, 4].map((year) => <button key={year} onClick={() => { setActiveYear(year); setSubjectForm((current) => ({ ...current, yearLevel: year })); }} className={`rounded-lg px-3 py-2 text-sm font-bold ${activeYear === year ? 'bg-[#003366] text-white' : 'bg-slate-100 text-slate-700'}`}>{yearLabels[year]}</button>)}</div>
-      {['FIRST', 'SECOND', 'MIDYEAR'].map((semester) => { const rows = subjects.filter((subject) => Number(subject.yearLevel) === activeYear && subject.semester === semester); const total = rows.reduce((sum, subject) => sum + Number(subject.units), 0); return <div key={semester} className="mb-6"><div className="mb-2 flex justify-between"><h3 className="font-bold">{semesterLabels[semester]}</h3><span className="text-sm font-semibold text-slate-600">Semester Units: {total}</span></div><div className="overflow-x-auto rounded-lg border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr><th className="px-3 py-2">Code</th><th className="px-3 py-2">Title</th><th className="px-3 py-2">Units</th><th className="px-3 py-2">Prerequisite</th>{editable ? <th className="px-3 py-2">Actions</th> : null}</tr></thead><tbody>{rows.map((subject) => <tr key={subject.subjectId} className="border-t border-slate-100"><td className="px-3 py-2 font-bold text-[#003366]">{subject.subjectCode}</td><td className="px-3 py-2">{subject.subjectTitle}</td><td className="px-3 py-2">{subject.units}</td><td className="px-3 py-2">{subject.prerequisite || 'None'}</td>{editable ? <td className="px-3 py-2"><button onClick={() => editSubject(subject)} className="mr-3 text-xs font-bold text-blue-700">Edit</button><button onClick={() => removeSubject(subject)} className="text-xs font-bold text-red-600">Remove</button></td> : null}</tr>)}{rows.length === 0 ? <tr><td colSpan="5" className="p-5 text-center text-slate-400">No subjects configured.</td></tr> : null}</tbody></table></div></div>; })}
-      {editable ? <form onSubmit={saveSubject} className="grid gap-3 rounded-xl bg-slate-50 p-4 md:grid-cols-2 xl:grid-cols-5"><input required placeholder="Subject code" value={subjectForm.subjectCode} onChange={(e) => setSubjectForm({ ...subjectForm, subjectCode: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2" /><input required placeholder="Subject title" value={subjectForm.subjectTitle} onChange={(e) => setSubjectForm({ ...subjectForm, subjectTitle: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2" /><input required type="number" min="0.01" step="0.01" value={subjectForm.units} onChange={(e) => setSubjectForm({ ...subjectForm, units: Number(e.target.value) })} className="rounded-lg border border-slate-300 px-3 py-2" /><select value={subjectForm.semester} onChange={(e) => setSubjectForm({ ...subjectForm, semester: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2">{Object.entries(semesterLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={subjectForm.prerequisite} onChange={(e) => setSubjectForm({ ...subjectForm, prerequisite: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2"><option value="">No prerequisite</option>{prerequisiteOptions.map((subject) => <option key={subject.subjectId} value={subject.subjectCode}>{subject.subjectCode}</option>)}</select><input type="number" min="0" step="0.5" placeholder="Lecture hours" value={subjectForm.lectureHours} onChange={(e) => setSubjectForm({ ...subjectForm, lectureHours: Number(e.target.value) })} className="rounded-lg border border-slate-300 px-3 py-2" /><input type="number" min="0" step="0.5" placeholder="Laboratory hours" value={subjectForm.laboratoryHours} onChange={(e) => setSubjectForm({ ...subjectForm, laboratoryHours: Number(e.target.value) })} className="rounded-lg border border-slate-300 px-3 py-2" /><input placeholder="Category" value={subjectForm.subjectType} onChange={(e) => setSubjectForm({ ...subjectForm, subjectType: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2" /><button disabled={saving} className="rounded-lg bg-blue-700 px-4 py-2 font-bold text-white">{editingSubjectId ? 'Update Subject' : '+ Add Subject'}</button>{editingSubjectId ? <button type="button" onClick={() => { setEditingSubjectId(null); setSubjectForm({ ...emptySubject, yearLevel: activeYear }); }} className="rounded-lg border border-slate-300 px-4 py-2 font-bold">Cancel Edit</button> : null}</form> : null}<div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><span className="font-bold text-[#003366]">Overall Units: {selected?.totalUnits ?? subjects.reduce((sum, subject) => sum + Number(subject.units), 0)}</span>{editable ? <button onClick={submit} disabled={saving} className="rounded-lg bg-emerald-700 px-5 py-2.5 font-bold text-white">Submit to Registrar</button> : <p className="text-sm text-slate-500">This version is read-only while under review or after approval.</p>}</div></>}</section>
+    {mode === 'manual' ? <>
+      {!selected && <form onSubmit={create} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="mb-3 font-bold">Curriculum Information</h2><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5"><select required value={curriculumForm.programCode} onChange={(e) => setCurriculumForm({ ...curriculumForm, programCode: e.target.value })} className={inputClass}><option value="">Select program</option>{programs.map((item) => <option key={item.programId} value={item.programCode}>{item.programCode} — {item.programName}</option>)}</select>{[['curriculumCode', 'Curriculum Code'], ['curriculumName', 'Curriculum Name'], ['curriculumVersion', 'Version'], ['schoolYear', 'School Year']].map(([field, placeholder]) => <input key={field} required placeholder={placeholder} value={curriculumForm[field]} onChange={(e) => setCurriculumForm({ ...curriculumForm, [field]: e.target.value })} className={inputClass} />)}</div><button disabled={saving} className="mt-3 rounded-lg bg-[#073b82] px-4 py-2 text-xs font-bold text-white">Create Curriculum</button></form>}
+      {selected && <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><h2 className="font-bold">▧ Curriculum Information</h2>{curricula.length > 1 && <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} className={`${inputClass} mt-0 min-w-40`}>{curricula.map((item) => <option key={item.curriculumId} value={item.curriculumId}>{item.curriculumVersion}</option>)}</select>}</div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">{[['programCode', 'Program'], ['curriculumCode', 'Curriculum Code'], ['curriculumName', 'Curriculum Name'], ['curriculumVersion', 'Version'], ['schoolYear', 'School Year']].map(([field, label]) => <label key={field} className="text-xs text-slate-600">{label}<input disabled={!editable || field === 'programCode'} value={selected[field] || ''} onChange={(e) => updateSelected(field, e.target.value)} className={inputClass} /></label>)}</div>{selected.registrarComment && <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"><strong>Registrar comment:</strong> {selected.registrarComment}</p>}
+      {editable && <form onSubmit={saveSubject} className="mt-5 border-t border-slate-200 pt-4">
+        <h3 className="mb-3 font-bold">▧ {editingId ? 'Edit Subject' : 'Add Subject'}</h3>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <label className="text-xs font-semibold text-slate-600">Year Level<select value={subjectForm.yearLevel} onChange={(e) => setSubjectForm({ ...subjectForm, yearLevel: Number(e.target.value), prerequisite: '' })} className={inputClass}>{Object.entries(years).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-semibold text-slate-600">Semester<select value={subjectForm.semester} onChange={(e) => setSubjectForm({ ...subjectForm, semester: e.target.value, prerequisite: '' })} className={inputClass}>{Object.entries(semesters).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs font-semibold text-slate-600">Course Code<input required placeholder="e.g. IT 101" value={subjectForm.subjectCode} onChange={(e) => setSubjectForm({ ...subjectForm, subjectCode: e.target.value })} className={inputClass} /></label>
+          <label className="text-xs font-semibold text-slate-600 xl:col-span-2">Course Title<input required placeholder="e.g. Introduction to Computing" value={subjectForm.subjectTitle} onChange={(e) => setSubjectForm({ ...subjectForm, subjectTitle: e.target.value })} className={inputClass} /></label>
+          <label className="text-xs font-semibold text-slate-600">Units<input required type="number" min="0.5" step="0.5" value={subjectForm.units} onChange={(e) => setSubjectForm({ ...subjectForm, units: Number(e.target.value) })} className={inputClass} /></label>
+
+          <div className="relative md:col-span-2 xl:col-span-4">
+            <label className="text-xs font-semibold text-slate-600">Prerequisite (Choose one or more subjects)</label>
+            <button type="button" onClick={() => setPrerequisiteOpen((open) => !open)} className={`${inputClass} flex items-center justify-between text-left`}><span className="truncate">{selectedPrerequisites.length ? selectedPrerequisites.join(', ') : 'None'}</span><span>⌄</span></button>
+            {prerequisiteOpen && <div className="absolute z-30 mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 shadow-xl">
+              <input autoFocus value={prerequisiteSearch} onChange={(e) => setPrerequisiteSearch(e.target.value)} placeholder="Search subjects..." className={`${inputClass} mt-0`} />
+              <button type="button" onClick={() => setSubjectForm((current) => ({ ...current, prerequisite: '' }))} className="mt-2 w-full rounded px-2 py-2 text-left text-xs font-semibold hover:bg-slate-50">None</button>
+              <p className="border-y bg-slate-50 px-2 py-2 text-[10px] font-bold text-slate-500">AVAILABLE SUBJECTS (FROM PREVIOUS SEMESTERS)</p>
+              <div className="max-h-48 overflow-y-auto">{filteredPrerequisites.map((item) => <label key={item.subjectId} className="flex cursor-pointer items-start gap-2 px-2 py-2 text-xs hover:bg-blue-50"><input type="checkbox" checked={selectedPrerequisites.includes(item.subjectCode)} onChange={() => togglePrerequisite(item.subjectCode)} className="mt-0.5" /><span><strong>{item.subjectCode}</strong> — {item.subjectTitle} <span className="text-slate-400">({years[item.yearLevel]}, {semesters[item.semester]})</span></span></label>)}{!filteredPrerequisites.length && <p className="p-3 text-center text-xs text-slate-400">No eligible subjects.</p>}</div>
+            </div>}
+          </div>
+          <div className="flex items-end justify-end gap-2 md:col-span-2 xl:col-span-2"><button type="button" onClick={() => { setSubjectForm(emptySubject); setEditingId(null); setPrerequisiteOpen(false); }} className="h-9 min-w-20 whitespace-nowrap rounded-lg border border-slate-300 px-3 text-xs font-bold">↻ Clear</button><button disabled={saving} className="h-9 min-w-28 whitespace-nowrap rounded-lg bg-[#073b82] px-4 text-xs font-bold text-white">{editingId ? 'Update Subject' : '+ Add Subject'}</button></div>
+        </div>
+      </form>}</section>}
+    </> : <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-bold">Bulk Upload Curriculum</h2><p className="mt-1 text-sm text-slate-500">Upload multiple subjects at once using the CSV template.</p><div className="mt-4 grid gap-5 lg:grid-cols-[1.2fr_.8fr]"><button disabled={!editable || saving} onClick={() => fileRef.current?.click()} className="flex min-h-52 flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-6 disabled:opacity-50"><span className="mb-3 rounded-lg bg-emerald-100 p-3 font-black text-emerald-700">CSV</span><strong>{uploadName || 'Drag and drop your CSV file here'}</strong><span className="mt-2 text-xs text-slate-500">or click to choose a file</span><input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => importCsv(e.target.files?.[0])} /></button><div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm"><h3 className="font-bold">Template Columns</h3>{['Year Level', 'Semester', 'Course Code', 'Course Title', 'Units', 'Prerequisite(s)'].map((item) => <div key={item} className="border-b border-amber-200 py-2 last:border-0">{item}</div>)}</div></div></section>}
+
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><div><h2 className="font-bold">Current Curriculum Checklist</h2><p className="text-xs text-slate-500">Review and manage the subjects in your curriculum.</p></div><div className="flex flex-wrap gap-2"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search subjects..." className={`${inputClass} mt-0 w-52`} /><span className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-bold">Total Subjects: {subjects.length}</span><span className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-bold">Total Units: {totalUnits}</span></div></div><div className="overflow-x-auto"><table className="min-w-full text-left text-xs"><thead className="bg-slate-50 text-slate-600"><tr>{['#', 'Year Level', 'Semester', 'Course Code', 'Course Title', 'Units', 'Prerequisite(s)', 'Actions'].map((item) => <th key={item} className="px-4 py-3">{item}</th>)}</tr></thead><tbody>{visibleSubjects.map((item, index) => <tr key={item.subjectId} className="border-t hover:bg-slate-50"><td className="px-4 py-3">{index + 1}</td><td className="px-4 py-3">{years[item.yearLevel]}</td><td className="px-4 py-3">{semesters[item.semester]}</td><td className="px-4 py-3 font-bold">{item.subjectCode}</td><td className="px-4 py-3">{item.subjectTitle}</td><td className="px-4 py-3">{item.units}</td><td className="px-4 py-3"><span className={`rounded px-2 py-1 ${item.prerequisite ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>{item.prerequisite || 'None'}</span></td><td className="whitespace-nowrap px-4 py-3"><button disabled={!editable} onClick={() => editSubject(item)} className="mr-3 font-bold text-blue-700 disabled:opacity-30">Edit</button><button disabled={!editable} onClick={() => deleteSubject(item)} className="font-bold text-red-600 disabled:opacity-30">Delete</button></td></tr>)}{!loading && !visibleSubjects.length && <tr><td colSpan="8" className="p-10 text-center text-slate-400">No subjects found in this curriculum.</td></tr>}</tbody></table></div></section>
+    {selected && <footer className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 p-3"><p className="text-xs"><strong>Reminder:</strong> Save your changes before submitting for Registrar review.</p><div className="flex flex-wrap gap-2"><button disabled={!editable || saving} onClick={saveMetadata} className="rounded-lg border bg-white px-3 py-2 text-xs font-bold disabled:opacity-50">Save Changes</button><button onClick={() => setPreview(true)} className="rounded-lg border bg-white px-3 py-2 text-xs font-bold">Preview Checklist</button><button disabled={!editable || saving || !subjects.length} onClick={submit} className="rounded-lg bg-[#073b82] px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Submit for Review</button></div></footer>}
+    {preview && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"><div className="max-h-[85vh] w-full max-w-4xl overflow-auto rounded-2xl bg-white shadow-2xl"><div className="sticky top-0 flex justify-between border-b bg-white p-4"><div><h2 className="font-bold">Curriculum Checklist Preview</h2><p className="text-xs text-slate-500">{selected?.curriculumName} · {selected?.schoolYear}</p></div><button onClick={() => setPreview(false)} className="rounded-lg border px-3">Close</button></div><div className="p-5">{Object.entries(years).map(([year, label]) => <div key={year} className="mb-5"><h3 className="mb-2 font-bold">{label}</h3>{subjects.filter((item) => Number(item.yearLevel) === Number(year)).map((item) => <div key={item.subjectId} className="grid grid-cols-[100px_1fr_70px] border-b py-2 text-sm"><strong>{item.subjectCode}</strong><span>{item.subjectTitle}</span><span>{item.units} units</span></div>)}</div>)}</div></div></div>}
   </div>;
 };
 

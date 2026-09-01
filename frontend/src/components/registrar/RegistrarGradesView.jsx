@@ -25,10 +25,8 @@ const RegistrarGradesView = ({
     latestChatNotice = null,
     onOpenChat,
 }) => {
-    const managementTabs = ['grades', 'Requests', 'assigning', 'bulkEnroll', 'createAccounts', 'curriculum', 'tickets', 'passwordResets', 'revokeAccounts'];
     const managementMenuItems = [
         { id: 'grades', label: 'Grades Ledger' },
-        { id: 'Requests', label: 'Pending Requests' },
         { id: 'assigning', label: 'Assigning' },
         { id: 'bulkEnroll', label: 'Student Enrollment' },
         { id: 'createAccounts', label: 'Create Staff Accounts' },
@@ -902,8 +900,6 @@ const RegistrarGradesView = ({
         }
     };
 
-    const isManagementView = managementTabs.includes(mainTab);
-
     return (
         <div className="flex h-screen w-full flex-col bg-slate-50 font-sans fixed inset-0 z-[100] overflow-auto">
             <RegistrarHeader registrarData={{ name: loggedInName, semester: activeSemester }} onLogout={() => { localStorage.removeItem('token'); window.location.reload(); }} />
@@ -915,48 +911,25 @@ const RegistrarGradesView = ({
                     latestChatNotice={latestChatNotice}
                     onOpenChat={onOpenChat}
                     managementDefaultTab="grades"
+                    managementMenuItems={managementMenuItems}
                 />
-                {isManagementView && (
-                    <aside className="w-full max-w-[220px] self-start rounded-2xl border border-slate-200 bg-slate-100 p-4 shadow-sm lg:sticky lg:top-6">
-                        <div className="mb-4 border-b border-slate-200 pb-3">
-                            <h2 className="text-lg font-bold text-[#003366]">Academic Management</h2>
-                        </div>
-
-                        <nav className="flex flex-col gap-2">
-                            {managementMenuItems.map((item) => {
-                                const isActive = mainTab === item.id;
-
-                                return (
-                                    <button
-                                        key={item.id}
-                                        type="button"
-                                        onClick={() => setMainTab(item.id)}
-                                        className={`w-full rounded-xl border-b-2 px-4 py-3 text-left text-sm font-medium transition ${
-                                            isActive
-                                                ? 'border-yellow-400 bg-[#003366] text-yellow-400 shadow-sm'
-                                                : 'border-transparent text-slate-700 hover:bg-slate-100'
-                                        }`}
-                                    >
-                                        {item.label}
-                                    </button>
-                                );
-                            })}
-                        </nav>
-                    </aside>
-                )}
-                <main className="flex-1 overflow-y-auto pr-2">
+                <main className="flex-1 overflow-y-auto pb-24 pr-2">
                     {mainTab === 'dashboard' && <RegistrarDashboard grades={grades} />}
                     {mainTab === 'encoding' && <EncodingPeriod onResetEncodingSeason={handleResetEncodingSeason} />}
                     {mainTab === 'studentlist' && <StudentListImport />}
                     {mainTab === 'sectioning' && (
-                        <div className="space-y-4">
-                            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                                <label className="block max-w-xl">
-                                    <span className="mb-2 block text-sm font-medium text-slate-700">Department</span>
+                        <div className="space-y-3">
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-900">Department Sections</h2>
+                                <p className="mt-0.5 text-xs text-slate-500">Generate sections, manage student assignments, and review removed students for the selected department.</p>
+                            </div>
+                            <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:grid-cols-[1fr_250px] lg:items-end">
+                                <label className="block">
+                                    <span className="mb-1 block text-[11px] font-semibold text-slate-600">Department</span>
                                     <select
                                         value={sectioningDepartment}
                                         onChange={(event) => setSectioningDepartment(event.target.value)}
-                                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-[#003366]"
+                                        className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs outline-none focus:border-[#003366]"
                                     >
                                         {departments.map((department) => (
                                             <option key={department} value={department}>
@@ -965,6 +938,10 @@ const RegistrarGradesView = ({
                                         ))}
                                     </select>
                                 </label>
+                                <div className="flex min-h-11 gap-2 rounded-md border border-blue-200 bg-blue-50/40 p-2 text-[10px] text-slate-600">
+                                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-blue-600 text-[9px] font-bold text-blue-700">i</span>
+                                    <div><p className="font-semibold text-slate-700">Tip</p><p>Generate sections to preview rosters and manage student assignments.</p></div>
+                                </div>
                             </div>
                             <RegistrarStudentSectioning chairpersonDepartment={sectioningDepartment} />
                         </div>

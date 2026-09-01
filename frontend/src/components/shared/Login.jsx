@@ -4,6 +4,7 @@ import '../../assets/App.css';
 import plvbg from '../../assets/plvbg.png';
 import plvlogo from '../../assets/plvlogo.png';
 import { login, forgotPassword, resetPassword } from '../../services/api';
+import { createLocalDevToken, createLocalDevTokenForRole } from '../../utils/localDevAuth';
 
 const Login = ({ onLogin }) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -37,6 +38,12 @@ const Login = ({ onLogin }) => {
     setError('');
     setMessage('');
     try {
+      const localDevToken = createLocalDevToken(email);
+      if (localDevToken) {
+        onLogin(localDevToken);
+        return;
+      }
+
       const data = await login({ username: email, password: password });
       if (data.token) {
         onLogin(data.token);
@@ -47,6 +54,13 @@ const Login = ({ onLogin }) => {
       setError(error.message || "Error connecting to the server.");
     }
     setIsLoading(false);
+  };
+
+  const enterLocalPortal = (role) => {
+    setError('');
+    setMessage('');
+    const token = createLocalDevTokenForRole(role);
+    if (token) onLogin(token);
   };
 
   const handleForgotPassword = async (e) => {
@@ -228,6 +242,30 @@ const Login = ({ onLogin }) => {
               <button type="submit" className="sign-in-btn" disabled={isLoading}>
                 {isLoading ? (<><span className="spinner"></span> Signing In...</>) : 'Sign In'}
               </button>
+              {process.env.NODE_ENV === 'development' && (
+                <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #ddd' }}>
+                  <p style={{ marginBottom: '8px', textAlign: 'center', color: '#666', fontSize: '13px' }}>
+                    Local access — middleware authentication disabled
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <button type="button" className="sign-in-btn" onClick={() => enterLocalPortal('system_admin')}>
+                      Enter as System Admin
+                    </button>
+                    <button type="button" className="sign-in-btn" onClick={() => enterLocalPortal('registrar')}>
+                      Enter as Registrar
+                    </button>
+                    <button type="button" className="sign-in-btn" onClick={() => enterLocalPortal('faculty')}>
+                      Enter as Faculty
+                    </button>
+                    <button type="button" className="sign-in-btn" onClick={() => enterLocalPortal('department_admin')}>
+                      Enter as Chairperson
+                    </button>
+                    <button type="button" className="sign-in-btn" onClick={() => enterLocalPortal('student')}>
+                      Enter as Student
+                    </button>
+                  </div>
+                </div>
+              )}
               <p className="forgot-password auth-link" onClick={() => { setCurrentView('forgotPassword'); setError(''); setMessage(''); }} style={{ cursor: 'pointer', fontWeight: 'normal', marginTop: '10px', textAlign: 'center' }}>
                 Forgot Password?
               </p>

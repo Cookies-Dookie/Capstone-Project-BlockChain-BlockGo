@@ -10,6 +10,7 @@ import RegistrarGradesView from './components/registrar/RegistrarGradesView';
 import SystemAdminPortal from './components/system-admin/SystemAdminPortal';
 import Chat from './components/shared/Chat';
 import { startNginxFailoverMonitor } from './services/nginxFailover';
+import { getLocalDevUser } from './utils/localDevAuth';
 
 import { BrowserRouter as Router } from 'react-router-dom';
 import { NotificationProvider, useNotification } from './services/NotificationContext';
@@ -57,6 +58,13 @@ function AppContent() {
       
       // Log the payload to the console so you can see exactly what keys your backend uses
       console.log("Decoded Token Payload:", payload);
+
+      const localDevUser = getLocalDevUser(payload);
+      if (localDevUser) {
+        localStorage.setItem('userRole', localDevUser.role);
+        setUser(localDevUser);
+        return;
+      }
       
       // Add safe fallbacks for standard JWT structures
       const email = payload.username || payload.email || payload['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'];

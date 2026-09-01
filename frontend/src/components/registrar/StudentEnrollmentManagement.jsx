@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  assignStudent,
   fetchApprovedStudents,
   fetchCurriculums,
   registrarBulkEnrollStudents,
@@ -15,24 +14,22 @@ const currentSchoolYear = () => {
   return `${start}-${start + 1}`;
 };
 
-const initialSemester = () => (new Date().getMonth() >= 5 ? 'FIRST' : 'SECOND');
-
 const StudentEnrollmentManagement = ({ programs = [] }) => {
   const [form, setForm] = useState({
     department: programs[0] || '',
     schoolYear: currentSchoolYear(),
-    semester: initialSemester(),
     yearLevel: '1',
-    section: '1-1',
     curriculumId: '',
   });
   const [file, setFile] = useState(null);
   const [students, setStudents] = useState([]);
   const [curricula, setCurricula] = useState([]);
-  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [manualForm, setManualForm] = useState({ firstName: '', lastName: '', middleName: '', birthdate: '', email: '', contactNumber: '', homeAddress: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
+  const [enrollmentSearch, setEnrollmentSearch] = useState('');
+  const [enrollmentMethod, setEnrollmentMethod] = useState('bulk');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -60,6 +57,15 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
     ),
     [curricula, form.department]
   );
+  const visibleStudents = useMemo(() => {
+    const query = enrollmentSearch.trim().toLowerCase();
+    if (!query) return students;
+    return students.filter((student) =>
+      [student.fullname, student.studentno, student.email, student.department]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query))
+    );
+  }, [students, enrollmentSearch]);
 
   useEffect(() => {
     if (matchingCurricula.some((item) => String(item.curriculumId) === String(form.curriculumId))) return;
@@ -69,13 +75,7 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
     }));
   }, [matchingCurricula, form.curriculumId]);
 
-  const updateField = (field, value) => {
-    setForm((current) => {
-      const next = { ...current, [field]: value };
-      if (field === 'yearLevel') next.section = `${value}-1`;
-      return next;
-    });
-  };
+  const updateField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
 
   const validateContext = () => {
     if (!form.department) return 'Select an academic program.';
@@ -83,16 +83,13 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
     const [start, end] = form.schoolYear.split('-').map(Number);
     if (end !== start + 1) return 'School year must contain consecutive years.';
     if (!/^[1-4]$/.test(form.yearLevel)) return 'Year level must be from 1 to 4.';
-    if (!new RegExp(`^${form.yearLevel}-\\d+$`).test(form.section)) return `Section must use ${form.yearLevel}-number.`;
     return '';
   };
 
   const enrollmentPayload = () => ({
     curriculumId: form.curriculumId || undefined,
     schoolYear: form.schoolYear,
-    semester: form.semester,
     yearLevel: form.yearLevel,
-    section: form.section,
   });
 
   const upload = async (mode) => {
@@ -115,21 +112,20 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
     }
   };
 
-  const enrollSelectedStudent = async () => {
+  const enrollManualStudent = async (event) => {
+    event.preventDefault();
     const validationError = validateContext();
     if (validationError) return setResult({ status: 'Error', message: validationError });
-    if (!selectedStudentId) return setResult({ status: 'Error', message: 'Select a student account.' });
     setSaving(true); setResult(null);
     try {
-      const response = await assignStudent(Number(selectedStudentId), {
-        Department: form.department,
-        Section: form.section,
-        YearLevel: form.yearLevel,
-        SchoolYear: form.schoolYear,
-        Semester: form.semester,
-        CurriculumId: form.curriculumId ? Number(form.curriculumId) : null,
-      });
+      const csv = buildCsvContent([
+        ['First Name', 'Last Name', 'Middle Name', 'Birthdate', 'Email Address', 'Contact Number', 'Home Address'],
+        [manualForm.firstName, manualForm.lastName, manualForm.middleName, manualForm.birthdate, manualForm.email, manualForm.contactNumber, manualForm.homeAddress],
+      ]);
+      const manualFile = new File([csv], 'manual-student-enrollment.csv', { type: 'text/csv' });
+      const response = await registrarBulkEnrollStudents(manualFile, form.department, enrollmentPayload());
       setResult(response);
+      setManualForm({ firstName: '', lastName: '', middleName: '', birthdate: '', email: '', contactNumber: '', homeAddress: '' });
       await load();
     } catch (error) {
       setResult({ status: 'Error', message: error.message || 'Student enrollment failed.' });
@@ -139,43 +135,37 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
   };
 
   const downloadTemplate = () => {
-    const curriculum = matchingCurricula.find((item) => String(item.curriculumId) === String(form.curriculumId));
     downloadCsvFile(buildCsvContent([
-      ['student_id', 'first_name', 'last_name', 'middle_name', 'sex', 'email', 'number', 'address', 'birthday', 'department', 'year_level', 'section', 'school_year', 'semester', 'curriculum_version'],
-      ['26-0001', 'Juan', 'Dela Cruz', 'Andres', 'Male', '26-0001@plv.edu.ph', '09123456789', 'Valenzuela City', '05/15/2005', form.department, form.yearLevel, form.section, form.schoolYear, form.semester, curriculum?.curriculumVersion || ''],
+      ['First Name', 'Last Name', 'Middle Name', 'Birthdate', 'Email Address', 'Contact Number', 'Home Address'],
+      ['Juan', 'Dela Cruz', 'Andres', '05/15/2005', 'juan.delacruz@plv.edu.ph', '09123456789', 'Valenzuela City'],
     ]), `student-enrollment-${form.schoolYear}.csv`);
   };
 
   return (
-    <div className="space-y-5">
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="text-xl font-bold text-[#003366]">Official Student Enrollment</h3>
-        <p className="mt-1 text-sm text-slate-500">Create or update student accounts, assign their academic period and section, and reference one published curriculum version.</p>
+    <div className="space-y-4">
+      <div>
+        <div><h3 className="text-xl font-bold text-[#003366]">Student Enrollment</h3></div>
+      </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <label className="text-sm font-semibold text-slate-700">Academic Program
-            <select value={form.department} onChange={(event) => updateField('department', event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h3 className="text-sm font-bold text-[#003366]">Enrollment Setup</h3>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <label className="text-xs font-semibold text-slate-700">Academic Program
+            <select value={form.department} onChange={(event) => updateField('department', event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs font-normal">
               {programs.map((program) => <option key={program} value={program}>{program}</option>)}
             </select>
           </label>
-          <label className="text-sm font-semibold text-slate-700">School Year
-            <input value={form.schoolYear} onChange={(event) => updateField('schoolYear', event.target.value)} placeholder="2026-2027" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+          <label className="text-xs font-semibold text-slate-700">School Year
+            <input value={form.schoolYear} onChange={(event) => updateField('schoolYear', event.target.value)} placeholder="2026-2027" className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-xs font-normal" />
           </label>
-          <label className="text-sm font-semibold text-slate-700">Semester
-            <select value={form.semester} onChange={(event) => updateField('semester', event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal">
-              <option value="FIRST">First Semester</option><option value="SECOND">Second Semester</option><option value="MIDYEAR">Midyear</option>
-            </select>
-          </label>
-          <label className="text-sm font-semibold text-slate-700">Year Level
-            <select value={form.yearLevel} onChange={(event) => updateField('yearLevel', event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal">
+          <label className="text-xs font-semibold text-slate-700">Year Level
+            <select value={form.yearLevel} onChange={(event) => updateField('yearLevel', event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs font-normal">
               {[1, 2, 3, 4].map((year) => <option key={year} value={year}>{year}{year === 1 ? 'st' : year === 2 ? 'nd' : year === 3 ? 'rd' : 'th'} Year</option>)}
             </select>
           </label>
-          <label className="text-sm font-semibold text-slate-700">Section
-            <input value={form.section} onChange={(event) => updateField('section', event.target.value)} placeholder={`${form.yearLevel}-1`} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
-          </label>
-          <label className="text-sm font-semibold text-slate-700">Curriculum Version
-            <select value={form.curriculumId} onChange={(event) => updateField('curriculumId', event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal">
+          <label className="text-xs font-semibold text-slate-700">Curriculum Version
+            <select value={form.curriculumId} onChange={(event) => updateField('curriculumId', event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs font-normal">
               <option value="">Latest published version (automatic)</option>
               {matchingCurricula.map((curriculum) => <option key={curriculum.curriculumId} value={curriculum.curriculumId}>{curriculum.curriculumVersion} · {curriculum.curriculumName}</option>)}
             </select>
@@ -187,36 +177,48 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
 
       {result ? <section className={`rounded-xl border p-4 text-sm ${result.status === 'Error' || result.failed > 0 ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}><p className="font-bold">{result.status || 'Result'}</p><p>{result.message}</p>{typeof result.successful !== 'undefined' ? <p className="mt-1">Successful: {result.successful} · Failed: {result.failed || 0}</p> : null}{result.errors?.length ? <ul className="mt-2 max-h-40 list-disc overflow-y-auto pl-5">{result.errors.slice(0, 20).map((item, index) => <li key={`${item.row || index}-${item.identifier || ''}`}>Row {item.row || '?'} ({item.identifier || 'Unknown'}): {item.reason}</li>)}</ul> : null}</section> : null}
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h4 className="font-bold text-[#003366]">Administrative Upload</h4>
-          <p className="mt-1 text-sm text-slate-500">New accounts require student ID, name, and real birthday. Existing accounts may be re-enrolled with student ID only.</p>
-          <label className="mt-4 block text-sm font-semibold text-slate-700">Enrollment File
-            <input type="file" accept=".csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => setFile(event.target.files?.[0] || null)} className="mt-1 block w-full rounded-lg border border-slate-300 p-2 text-sm font-normal" />
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h4 className="text-sm font-bold text-[#003366]">Enrollment Method</h4>
+        <div className="mt-3 flex border-b border-slate-200">
+          <button type="button" onClick={() => setEnrollmentMethod('bulk')} className={`border-b-2 px-5 py-2 text-xs font-bold transition ${enrollmentMethod === 'bulk' ? 'border-blue-700 bg-blue-50 text-blue-700' : 'border-transparent text-slate-500 hover:text-[#003366]'}`}>⇧ &nbsp; Bulk Upload</button>
+          <button type="button" onClick={() => setEnrollmentMethod('manual')} className={`border-b-2 px-5 py-2 text-xs font-bold transition ${enrollmentMethod === 'manual' ? 'border-blue-700 bg-blue-50 text-blue-700' : 'border-transparent text-slate-500 hover:text-[#003366]'}`}>♙ &nbsp; Manual Entry</button>
+        </div>
+
+        {enrollmentMethod === 'bulk' ? <div>
+          <label className="mt-4 flex min-h-24 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-blue-300 bg-blue-50/30 p-4 text-center text-xs font-semibold text-blue-700">
+            <span>Drag and drop your file here, or click to browse</span>
+            <span className="mt-1 text-[10px] font-normal text-slate-500">Accepted file type: .xlsx or .csv</span>
+            <input type="file" accept=".csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => setFile(event.target.files?.[0] || null)} className="sr-only" />
+            {file ? <span className="mt-2 text-emerald-700">{file.name}</span> : null}
           </label>
           <div className="mt-4 flex flex-wrap gap-2">
             <button type="button" onClick={downloadTemplate} className={downloadTemplateButtonClass}>Download Template</button>
             <button type="button" disabled={saving} onClick={() => upload('enroll')} className="rounded-xl bg-[#003366] px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : 'Upload & Enroll'}</button>
-            <button type="button" disabled={saving} onClick={() => upload('update')} className="rounded-xl border border-[#003366] px-5 py-3 text-sm font-bold text-[#003366] disabled:opacity-50">Update Existing</button>
           </div>
-        </section>
+        </div> : <form onSubmit={enrollManualStudent} className="pt-4">
+          <div className="mb-4 flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-lg text-blue-700">♙</span><div><h5 className="text-sm font-bold text-[#003366]">Manual Student Enrollment</h5><p className="text-[10px] text-slate-500">Add a student manually by entering their information below.</p></div></div>
+          <div className="overflow-hidden rounded-lg border border-slate-200">
+            <h6 className="bg-slate-50 px-4 py-3 text-xs font-bold text-[#003366]">Student Information</h6>
+            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+              {[
+                ['firstName', 'First Name', 'Enter first name', true, 'text'],
+                ['lastName', 'Last Name', 'Enter last name', true, 'text'],
+                ['middleName', 'Middle Name', 'Enter middle name (optional)', false, 'text'],
+                ['birthdate', 'Birthdate', 'Select birthdate', true, 'date'],
+                ['email', 'Email Address', 'e.g. student@plv.edu.ph', true, 'email'],
+                ['contactNumber', 'Contact Number', 'Enter contact number', true, 'tel'],
+              ].map(([field, label, placeholder, required, type]) => <label key={field} className="text-[10px] font-semibold text-slate-700">{label}{required && <span className="text-red-500"> *</span>}<input required={required} type={type} value={manualForm[field]} onChange={(event) => setManualForm((current) => ({ ...current, [field]: event.target.value }))} placeholder={placeholder} className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-3 text-xs font-normal outline-none focus:border-blue-600" /></label>)}
+              <label className="text-[10px] font-semibold text-slate-700 md:col-span-2 xl:col-span-3">Home Address <span className="text-red-500">*</span><textarea required value={manualForm.homeAddress} onChange={(event) => setManualForm((current) => ({ ...current, homeAddress: event.target.value }))} placeholder="Enter complete home address" rows="2" className="mt-1 w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs font-normal outline-none focus:border-blue-600" /></label>
+            </div>
+            <p className="mx-4 rounded-lg bg-blue-50 px-3 py-2 text-[10px] text-blue-700">● &nbsp; After saving, the student will receive a Student ID and can be enrolled in a department.</p>
+            <div className="mt-4 flex justify-end gap-2 border-t border-slate-100 p-4"><button type="button" onClick={() => setManualForm({ firstName: '', lastName: '', middleName: '', birthdate: '', email: '', contactNumber: '', homeAddress: '' })} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-bold text-slate-600">Cancel</button><button disabled={saving || loading} className="rounded-lg bg-[#003366] px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : '♙  Save Student'}</button></div>
+          </div>
+        </form>}
+      </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h4 className="font-bold text-[#003366]">Manual Enrollment</h4>
-          <p className="mt-1 text-sm text-slate-500">Assign the selected period, section, and curriculum to an existing student account.</p>
-          <label className="mt-4 block text-sm font-semibold text-slate-700">Student Account
-            <select value={selectedStudentId} onChange={(event) => setSelectedStudentId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal">
-              <option value="">Select student</option>
-              {students.map((student) => <option key={student.id} value={student.id}>{student.studentno || student.email} · {student.fullname}</option>)}
-            </select>
-          </label>
-          <button type="button" disabled={saving || loading} onClick={enrollSelectedStudent} className="mt-4 rounded-xl bg-emerald-700 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">Save Student Enrollment</button>
-        </section>
-      </div>
-
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><h4 className="font-bold text-[#003366]">Current Student Enrollments</h4><button type="button" onClick={load} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold">Refresh</button></div>
-        <div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="bg-[#003366] text-white"><th className="px-4 py-3">Student</th><th className="px-4 py-3">Program / Section</th><th className="px-4 py-3">Period</th><th className="px-4 py-3">Curriculum</th><th className="px-4 py-3">Status</th></tr></thead><tbody>{students.map((student) => <tr key={student.id} className="border-b"><td className="px-4 py-3"><span className="block font-semibold">{student.fullname}</span><span className="text-xs text-slate-500">{student.studentno}</span></td><td className="px-4 py-3">{student.department || 'Unassigned'}<span className="block text-xs text-slate-500">Year {student.yearLevel || '—'} · {student.section || 'No section'}</span></td><td className="px-4 py-3">{student.schoolYear || '—'}<span className="block text-xs text-slate-500">{student.semester || '—'}</span></td><td className="px-4 py-3">{student.curriculumVersion || 'Not assigned'}</td><td className="px-4 py-3">{student.enrollmentStatus || student.assignmentStatus || 'Unassigned'}</td></tr>)}{!loading && students.length === 0 ? <tr><td colSpan="5" className="px-4 py-8 text-center text-slate-500">No active student accounts found.</td></tr> : null}</tbody></table></div>
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><h4 className="text-sm font-bold text-[#003366]">Current Student Enrollments</h4><div className="flex gap-2"><input value={enrollmentSearch} onChange={(event) => setEnrollmentSearch(event.target.value)} placeholder="Search by student name or ID..." className="h-9 w-full rounded-lg border border-slate-300 px-3 text-xs outline-none sm:w-64"/><button type="button" onClick={load} className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700">Refresh</button></div></div>
+        <div className="overflow-x-auto"><table className="min-w-full text-left text-xs"><thead><tr className="bg-slate-50 text-slate-600"><th className="px-4 py-3">Student</th><th className="px-4 py-3">Program / Year Level</th><th className="px-4 py-3">School Year</th><th className="px-4 py-3">Curriculum</th><th className="px-4 py-3">Status</th></tr></thead><tbody>{visibleStudents.map((student) => <tr key={student.id} className="border-b"><td className="px-4 py-3"><span className="block font-semibold">{student.fullname}</span><span className="text-xs text-slate-500">{student.studentno}</span></td><td className="px-4 py-3">{student.department || 'Unassigned'}<span className="block text-xs text-slate-500">Year {student.yearLevel || '—'}</span></td><td className="px-4 py-3">{student.schoolYear || '—'}</td><td className="px-4 py-3">{student.curriculumVersion || 'Not assigned'}</td><td className="px-4 py-3">{student.enrollmentStatus || student.assignmentStatus || 'Unassigned'}</td></tr>)}{!loading && visibleStudents.length === 0 ? <tr><td colSpan="5" className="px-4 py-8 text-center text-slate-500">No active student enrollment yet.</td></tr> : null}</tbody></table></div>
       </section>
     </div>
   );

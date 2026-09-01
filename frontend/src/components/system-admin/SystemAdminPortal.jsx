@@ -36,7 +36,10 @@ function SystemAdminPortal({ adminData, onLogout }) {
 
   return (
     <div className="fixed inset-0 z-[100] flex min-h-screen flex-col overflow-hidden bg-slate-100 text-slate-900">
-      <header className="shrink-0 border-b border-blue-950 bg-[#003366] text-white shadow-sm">
+      <header
+        className="shrink-0 border-b-2 border-yellow-400 bg-[#001b55] text-white shadow-sm"
+        style={{ backgroundImage: "linear-gradient(118deg, transparent 0 48%, rgba(10,48,122,.72) 48.2% 62%, transparent 62.2%), linear-gradient(142deg, transparent 0 68%, rgba(0,43,112,.85) 68.2% 83%, transparent 83.2%), linear-gradient(105deg, #00113f 0%, #002469 54%, #001748 100%)" }}
+      >
         <div className="flex min-h-[72px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white">

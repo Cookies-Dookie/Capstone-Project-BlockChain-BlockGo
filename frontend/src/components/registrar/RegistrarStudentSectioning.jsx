@@ -201,7 +201,9 @@ function RegistrarStudentSectioning({
     useState(CURRENT_YEAR);
   const batchYearPickerRef = useRef(null);
   const rosterRef = useRef(null);
+  const addStudentRef = useRef(null);
   const [selectedSectionCode, setSelectedSectionCode] = useState("");
+  const [isRosterView, setIsRosterView] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
   const [pendingRemoval, setPendingRemoval] = useState(null);
   const [studentForm, setStudentForm] = useState({
@@ -278,6 +280,7 @@ function RegistrarStudentSectioning({
 
   const viewSectionRoster = (sectionCode) => {
     setSelectedSectionCode(sectionCode);
+    setIsRosterView(true);
     window.requestAnimationFrame(() => {
       rosterRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
@@ -2405,19 +2408,21 @@ function RegistrarStudentSectioning({
         </section>
       ) : null}
 
-      <div className="space-y-6">
-        <main className="space-y-6">
+      <div className="space-y-3">
+        <main className="space-y-3">
+          {!isRosterView ? (
+            <>
           {isRegistrarMode ? (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
               <div>
-                <h3 className="text-xl font-bold text-[#003366]">
+                <h3 className="text-sm font-bold text-[#003366]">
                   Section Generator
                 </h3>
               </div>
 
-              <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-[170px_170px_170px_auto_auto_auto] lg:items-end">
+              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3 xl:grid-cols-[135px_135px_135px_auto_auto_auto_auto] xl:items-end">
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">
+                  <span className="mb-1 block text-xs font-medium text-slate-700">
                     Year level
                   </span>
                   <select
@@ -2449,7 +2454,7 @@ function RegistrarStudentSectioning({
                       }
                       setSelectedSectionCode(nextYearSection?.sectionCode || "");
                     }}
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-[#003366]"
+                    className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-[#003366]"
                   >
                     {AVAILABLE_YEAR_LEVELS.map((yearLevel) => (
                       <option key={yearLevel} value={yearLevel}>
@@ -2460,7 +2465,7 @@ function RegistrarStudentSectioning({
                 </label>
 
                 <div className="block">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">
+                  <span className="mb-1 block text-xs font-medium text-slate-700">
                     Batch year
                   </span>
                   <div ref={batchYearPickerRef} className="relative">
@@ -2471,7 +2476,7 @@ function RegistrarStudentSectioning({
                       onFocus={openBatchYearPicker}
                       onClick={openBatchYearPicker}
                       onChange={(event) => handleBatchYearChange(event.target.value)}
-                      className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-[#003366]"
+                      className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-[#003366]"
                       placeholder="Select Year"
                     />
 
@@ -2532,7 +2537,7 @@ function RegistrarStudentSectioning({
                 </div>
 
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">
+                  <span className="mb-1 block text-xs font-medium text-slate-700">
                     Number of sections
                   </span>
                   <input
@@ -2540,14 +2545,14 @@ function RegistrarStudentSectioning({
                     min="1"
                     value={manualSectionCount}
                     onChange={(event) => setManualSectionCount(event.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-[#003366]"
+                    className="h-8 w-full rounded-md border border-slate-300 px-2 text-[11px] outline-none focus:border-[#003366]"
                   />
                 </label>
 
                 <button
                   type="button"
                   onClick={handleGenerateSections}
-                  className="rounded-xl bg-[#003366] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#00264d]"
+                  className="h-8 whitespace-nowrap rounded-md bg-[#003366] px-3 text-[11px] font-semibold text-white transition hover:bg-[#00264d]"
                 >
                   Generate Sections
                 </button>
@@ -2555,7 +2560,7 @@ function RegistrarStudentSectioning({
                   type="button"
                   onClick={handleShuffleSections}
                   disabled={!selectedBatch || yearSectionPlans.length < 2}
-                  className="rounded-xl border border-[#003366] px-5 py-3 text-sm font-semibold text-[#003366] transition hover:bg-[#003366] hover:text-white disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+                  className="h-8 whitespace-nowrap rounded-md border border-blue-200 px-3 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
                 >
                   Shuffle Students
                 </button>
@@ -2570,7 +2575,7 @@ function RegistrarStudentSectioning({
                   type="button"
                   onClick={handleSaveSectioning}
                   disabled={!selectedBatch || !sectionPlans.length}
-                  className="rounded-xl border border-[#003366] px-5 py-3 text-sm font-semibold text-[#003366] transition hover:bg-[#003366] hover:text-white disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+                  className="h-8 whitespace-nowrap rounded-md border border-[#003366] px-3 text-[11px] font-semibold text-[#003366] transition hover:bg-[#003366] hover:text-white disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
                 >
                   Save Sections
                 </button>
@@ -2579,11 +2584,11 @@ function RegistrarStudentSectioning({
             </section>
           ) : null}
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="mb-3 flex flex-col gap-2 border-b border-slate-200 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h3 className="text-xl font-bold text-[#003366]">
-                    Sections Preview
+                  <h3 className="border-b-2 border-blue-700 px-2 pb-3 text-xs font-semibold text-blue-700">
+                    All Sections <span className="ml-1 rounded-full bg-blue-50 px-2 py-0.5">{sectionSummaries.length}</span>
                   </h3>
                 </div>
                 {isChairpersonMode ? (
@@ -2633,11 +2638,11 @@ function RegistrarStudentSectioning({
               </div>
 
               {sectionSummaries.length ? (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
                   {sectionSummaries.map((section) => (
                     <article
                       key={section.sectionCode}
-                      className={`rounded-xl border p-4 transition ${
+                      className={`rounded-md border p-2.5 transition ${
                         selectedSection?.sectionCode === section.sectionCode
                           ? "border-[#003366] bg-[#003366]/5"
                           : "border-slate-200 bg-white"
@@ -2649,18 +2654,15 @@ function RegistrarStudentSectioning({
                           onClick={() => viewSectionRoster(section.sectionCode)}
                           className="text-left"
                         >
-                          <p className="text-sm font-semibold text-slate-500">
-                            Section {section.sectionCode}
-                          </p>
-                          <p className="mt-1 text-xs font-semibold uppercase text-slate-400">
-                            Batch {displayedBatchYear}
-                          </p>
-                          <p className="mt-1 text-xl font-bold text-[#003366]">
+                          <p className="text-sm font-bold text-[#003366]">
                             {section.sectionName}
+                          </p>
+                          <p className="mt-1 text-[10px] text-slate-500">
+                            Section {section.sectionCode} &nbsp;•&nbsp; Batch {displayedBatchYear} &nbsp;•&nbsp; {selectedYearLevel}
                           </p>
                         </button>
 
-                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                        <span className="whitespace-nowrap rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-600">
                           {section.assigned} student
                           {section.assigned === 1 ? "" : "s"}
                         </span>
@@ -2676,30 +2678,30 @@ function RegistrarStudentSectioning({
                               event.target.value
                             )
                           }
-                          className="mt-4 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#003366]"
+                          className="mt-2 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] outline-none focus:border-[#003366]"
                           aria-label={`Edit ${section.sectionCode} section name`}
                         />
                       ) : null}
 
-                      <div className="mt-4 flex flex-wrap gap-2">
+                      <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2">
                         <button
                           type="button"
                           onClick={() => viewSectionRoster(section.sectionCode)}
-                          className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                          className="rounded-md border border-blue-100 px-3 py-1.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-50"
                         >
-                          View Students
+                          View Roster
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDownloadSectionCsv(section.sectionCode)}
-                          className="rounded-lg border border-[#003366] px-3 py-2 text-sm font-semibold text-[#003366] hover:bg-[#003366] hover:text-white"
+                          className="rounded-md border border-blue-100 px-3 py-1.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-50"
                         >
                           Export CSV
                         </button>
                         <button
                           type="button"
                           onClick={() => handleImportSectionCsv(section.sectionCode)}
-                          className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+                          className="rounded-md border border-emerald-200 px-3 py-1.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50"
                         >
                           Upload CSV
                         </button>
@@ -2707,7 +2709,7 @@ function RegistrarStudentSectioning({
                           <button
                             type="button"
                             onClick={() => handleDeleteSection(section.sectionCode)}
-                            className="rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50"
+                            className="rounded-md border border-red-200 px-3 py-1.5 text-[10px] font-semibold text-red-600 hover:bg-red-50"
                           >
                             Delete Section
                           </button>
@@ -2717,18 +2719,26 @@ function RegistrarStudentSectioning({
                   ))}
                 </div>
               ) : (
-                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-5 text-center text-xs text-slate-500">
                   {isRegistrarMode
                     ? "Generate sections to preview students by section."
                     : "No registrar-created sections are available yet."}
                 </div>
               )}
             </section>
+            </>
+          ) : null}
 
+            {isRosterView ? (
             <section ref={rosterRef} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <h3 className="text-xl font-bold text-[#003366]">
+              <div className="mb-5 flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex items-center gap-4">
+                  <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-7 w-7"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2"/><path d="M3 20v-2a6 6 0 0 1 12 0v2m0-5a4 4 0 0 1 6 3v2"/></svg>
+                  </span>
+                  <div>
+                    <button type="button" onClick={() => setIsRosterView(false)} className="mb-2 text-xs font-medium text-blue-700 hover:underline">Department Sections &nbsp;›</button>
+                    <h3 className="text-2xl font-bold text-[#003366]">
                     {selectedSection
                       ? selectedSection.sectionName ||
                         getDefaultSectionName(
@@ -2736,16 +2746,35 @@ function RegistrarStudentSectioning({
                           selectedSection.sectionCode
                         )
                       : "Section Students"}
-                  </h3>
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">{chairpersonDepartment} &nbsp;•&nbsp; Batch {displayedBatchYear} &nbsp;•&nbsp; {selectedYearLevel} &nbsp; <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">{visibleSectionStudents.length} Students</span></p>
+                  </div>
                 </div>
 
+                <button type="button" onClick={() => setIsRosterView(false)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-[#003366] hover:bg-slate-50">
+                  <span aria-hidden="true">←</span> Back to Department Sections
+                </button>
+              </div>
+
+              <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center">
                 <input
-                  type="text"
-                  value={studentSearch}
-                  onChange={(event) => setStudentSearch(event.target.value)}
-                  placeholder="Search Student"
-                  className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-[#003366] lg:max-w-xs"
-                />
+                    type="text"
+                    value={studentSearch}
+                    onChange={(event) => setStudentSearch(event.target.value)}
+                    placeholder="Search by ID or name..."
+                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-[#003366] lg:max-w-sm"
+                  />
+                {isRegistrarMode ? (
+                  <button
+                    type="button"
+                    onClick={() => addStudentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-[#003366] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#00264d]"
+                  >
+                    <span className="text-lg leading-none">+</span> Add Student
+                  </button>
+                ) : null}
+                <button type="button" onClick={() => handleDownloadSectionCsv(selectedSection?.sectionCode)} className="rounded-lg border border-blue-200 px-4 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-50">Export CSV</button>
+                {isRegistrarMode ? <button type="button" onClick={() => handleImportSectionCsv(selectedSection?.sectionCode)} className="rounded-lg border border-blue-200 px-4 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-50">Upload CSV</button> : null}
               </div>
 
               {pendingRemoval ? (
@@ -2886,9 +2915,10 @@ function RegistrarStudentSectioning({
                 </table>
               </div>
             </section>
+            ) : null}
 
             {isRegistrarMode ? (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <section ref={addStudentRef} className="scroll-mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h3 className="text-xl font-bold text-[#003366]">
                 Add Student
               </h3>
