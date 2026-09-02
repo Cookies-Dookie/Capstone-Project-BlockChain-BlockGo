@@ -5,7 +5,8 @@
 ### 1. Prerequisites
 - Kubernetes cluster (v1.24+) running (local: Docker Desktop, minikube, kind)
 - `kubectl` CLI installed and configured
-- Sufficient resources: 4 CPU cores, 16GB RAM minimum
+- Sufficient resources: 4 CPU cores and 8GB RAM for the local profile; size
+  production clusters from measured load (16GB RAM or more is recommended)
 
 ### 2. Deploy to Kubernetes
 
@@ -30,9 +31,12 @@ chmod +x ./full_deploy.sh
 kubectl logs deployment/middleware-api -n plv-fabric -f
 ```
 
-The local `apply` command rebuilds `frontend:latest`, `client-app:latest`, the
-middleware image, and all three chaincode images directly from the current
-workspace before restarting the Kubernetes Deployments. It also stops before
+The local `apply` command rebuilds `frontend:latest`, the shared .NET
+`client-app:latest` image, the shared middleware image, and all three chaincode
+images directly from the current workspace before restarting the Kubernetes
+Deployments. The .NET image runs as a gateway plus five independently deployed
+services; the middleware image runs as its existing gateway and internal
+services. The command also stops before
 deployment if the required college grade-equivalent or Fabric timestamp fixes
 are missing. This prevents Docker Desktop from silently reusing stale frontend
 or backend images after a code change. Chaincode Deployments are restarted even
@@ -47,6 +51,12 @@ The local profile does not create application HPAs because Docker Desktop does
 not expose the `metrics.k8s.io` resource metrics API by default. The production
 profile applies `11a-application-hpa.yaml`; confirm the target cluster provides
 the resource metrics API before deploying.
+
+The local profile is tuned for an 8GB Docker Desktop Kubernetes node. It runs
+one replica of each application service, uses no-surge restarts, removes any
+production `ResourceQuota`/`LimitRange` objects left behind in the local
+namespaces, and applies bounded per-service memory settings. Production
+replicas, admission policies, and resource settings are unchanged.
 
 ### 3. Verify Deployment
 
@@ -85,6 +95,29 @@ curl http://localhost:4000/api/ready
 
 The readiness response reports each internal service independently. Internal
 Services are ClusterIP-only and are not exposed through Ingress.
+
+The existing `client-app-service:5000` address is also retained as a stable
+compatibility endpoint, but it now selects `dotnet-api-gateway` rather than a
+monolithic backend. The gateway routes requests to these ClusterIP-only .NET
+services:
+
+| .NET service | Internal port | Responsibility |
+|---|---:|---|
+| `dotnet-auth-service` | 5101 | Authentication, accounts, password resets, and enrollment requests |
+| `dotnet-academic-service` | 5102 | Curricula, grade templates, sectioning, dashboards, and search |
+| `dotnet-grade-service` | 5103 | Grade workflows, student records, and bulk uploads |
+| `dotnet-operations-service` | 5104 | Settings, monitoring, support tickets, and keep-alive tasks |
+| `dotnet-realtime-service` | 5105 | SignalR `/chatHub` connections and notifications |
+
+For direct .NET gateway diagnostics:
+
+```bash
+kubectl port-forward -n plv-fabric svc/dotnet-api-gateway 5000:5000
+curl http://localhost:5000/health
+curl http://localhost:5000/api/ready
+```
+
+`/api/ready` reports the availability of all five internal .NET services.
 
 ### System Administrator Portal
 
@@ -134,16 +167,30 @@ must be applied without changing Fabric channel or chaincode state.
 
 ### 6. CouchDB Data Locations
 
-- Wallet CouchDB services (`localhost:5990`, `6990`, and `7990` in Compose)
-  store Fabric identities only. They do not store grades.
+- Wallet CouchDB services store Fabric identities only. They do not store
+  grades. A successful `local apply` starts authenticated, localhost-only
+  Kubernetes port-forwards automatically:
+
+  - Registrar: `http://localhost:5990/_utils/`
+  - Faculty: `http://localhost:6990/_utils/`
+  - Department: `http://localhost:7990/_utils/`
+
+  The deployment script tracks these helper processes and stops them during
+  `./k8s/deploy-k8s.sh local delete`. If a tunnel exits because its pod is
+  replaced, rerunning `local apply` recreates and verifies it.
 - Peer CouchDB services store Fabric world state. For Compose, the registrar
-  peer database is exposed at `http://localhost:5985/_utils/`.
-- In Kubernetes, port-forward the peer service when direct inspection is
-  required:
+  peer database is exposed at `http://localhost:5986/_utils/`. A successful
+  Kubernetes `local apply` now preserves that same address with an
+  authenticated, localhost-only `5986:5984` port-forward:
 
 ```bash
-kubectl port-forward -n plv-main-campus svc/couchdb-registrar 5985:5984
+kubectl port-forward --address=127.0.0.1 -n plv-main-campus svc/couchdb-registrar 5986:5984
 ```
+
+Production CouchDB Services remain `ClusterIP` and are never published by this
+script. Inspect production databases only from a trusted administrative host
+using an explicit `kubectl port-forward`, VPN, or equivalent private access;
+do not expose CouchDB directly through a public Ingress or LoadBalancer.
 
 After bootstrap, CouchDB creates `registrar-channel_registrar`. It contains the
 genesis record and grades that have completed registrar finalization. Grades
@@ -167,7 +214,8 @@ in PostgreSQL `pending_grade_records` until finalization succeeds.
 | Fabric Peer | Deployment | 1 | 50Gi |
 | Fabric CA | Deployment | 3 | ephemeral |
 | CouchDB | StatefulSet | 1 | 30Gi |
-| Middleware API | Deployment | 2-5 (HPA) | ephemeral |
+| Middleware gateway and services | Deployments | 2-5 each (HPA) | ephemeral |
+| .NET gateway and services | Deployments | 2-5 each (HPA) | ephemeral |
 | IPFS Nodes | StatefulSet | 3 (Main, Annex, Pubad) | 5Gi per node (10Gi in the local profile) |
 
 ## Storage

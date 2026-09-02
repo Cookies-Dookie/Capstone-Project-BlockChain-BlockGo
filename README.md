@@ -15,16 +15,17 @@ This system utilizes a clean separation of concerns, splitting standard database
 - Hosted securely behind an **Nginx Reverse Proxy** (Port 80), eliminating the need for users to specify ports.
 - Communicates with backends via JWT authorization.
 
-### 2. Database Orchestrator (ASP.NET Core / C#)
-- **Port:** 5000 (Internal)
-- **Role:** Standard Web2 operations.
-- Manages the **PostgreSQL** relational database (`ActivityLogs`).
-- Handles the user waitlist, profile data, and organizational assignments (Departments, Sections, Year Levels).
-- Uses an internal `HttpClient` to ping the Node.js middleware for secure hashing and blockchain wallet creation.
+### 2. Database Services (ASP.NET Core / C#)
+- **Gateway port:** 5000 (Internal)
+- **Service ports:** 5101-5105 (ClusterIP-only)
+- Runs as an API gateway plus independently deployed auth/account, academic, grade, operations, and realtime services.
+- Manages the **PostgreSQL** relational database (`ActivityLogs`), waitlist, profile data, assignments, grade workflows, monitoring, and SignalR notifications.
+- Preserves the existing `/api/*` and `/chatHub` contracts through `client-app-service`, so the frontend and Node.js middleware do not need service-specific URLs.
+- Uses the existing Node.js middleware gateway for cryptographic and blockchain operations.
 
 ### 3. Blockchain Bridge / Middleware (Node.js & Express)
-- **Port:** 4000 (Internal)
-- **Role:** Web3 & Cryptography gateway.
+- **Gateway port:** 4000 (Internal)
+- **Role:** Web3 & Cryptography microservices.
 - Integrates the **Hyperledger Fabric SDK**.
 - Manages X.509 Cryptographic Certificates, JWT generation, and bcrypt password hashing.
 - Submits and queries smart contract (Chaincode) transactions on the Fabric Ledger, mapping users to a secure CouchDB Wallet.

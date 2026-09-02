@@ -1,3 +1,5 @@
+import { getAuthToken } from './authSession';
+
 const getBaseUrl = (endpoint) => {
     if (process.env.REACT_APP_API_BASE_URL) {
         return process.env.REACT_APP_API_BASE_URL.replace(/\/$/, '');
@@ -20,7 +22,7 @@ export const getChatHubUrl = () => {
 };
 
 const fetchWithAuth = async (endpoint, options = {}) => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     const baseUrl = getBaseUrl(endpoint);
     
     const headers = { ...options.headers };
@@ -466,6 +468,10 @@ export const fetchApprovedStudents = async () => {
     return await fetchWithAuth(`/Auth/students/approved`);
 };
 
+export const fetchNextStudentId = async (year) => {
+    return await fetchWithAuth(`/Auth/students/next-id?year=${encodeURIComponent(year)}`);
+};
+
 export const assignStudent = async (id, assignmentData) => {
     return await fetchWithAuth(`/Auth/students/${encodeURIComponent(id)}/assign`, {
         method: 'PUT',
@@ -643,7 +649,7 @@ export const bulkUploadMasterlist = async (file, department = '') => {
 export const openDecryptedIpfsFile = async (cid, vaultPassword = '', targetWindow = null) => {
     if (!cid) throw new Error('CID is required.');
 
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     const baseUrl = getBaseUrl('/Grades');
     const viewerWindow = targetWindow || window.open('', '_blank');
 
@@ -805,7 +811,7 @@ export const searchRegistrarRecords = async (params = {}) => {
 
 export const downloadGradingSheet = async (department, section) => {
     const baseUrl = getBaseUrl('/GradeTemplate');
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     const endpoint = `/GradeTemplate/department/${encodeURIComponent(department)}/section/${encodeURIComponent(section)}/download`;
     
     const response = await fetch(`${baseUrl}${endpoint}`, {

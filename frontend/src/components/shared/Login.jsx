@@ -46,7 +46,7 @@ const Login = ({ onLogin }) => {
 
       const data = await login({ username: email, password: password });
       if (data.token) {
-        onLogin(data.token);
+        await onLogin(data.token);
       } else {
         setError(data.error || "Login failed. Invalid email or password.");
       }
@@ -105,7 +105,7 @@ const Login = ({ onLogin }) => {
         setCurrentView('signIn');
         setPassword('');
         setConfirmPassword('');
-        window.history.replaceState({}, document.title, "/");
+        window.history.replaceState({}, document.title, "/login");
       }, 3000);
     } catch (error) {
       setError(error.message);

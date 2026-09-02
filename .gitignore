@@ -51,6 +51,8 @@ appsettings.*.json
 .fake
 network/.local-frontend-port-forward*.log
 network/.local-frontend-port-forward*.pid
+network/.local-couchdb-*-port-forward*.log
+network/.local-couchdb-*-port-forward*.pid
 
 # =========================
 # GLOBAL DATABASES

@@ -12,6 +12,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Security.Cryptography;
 using System.Text;
 using Npgsql;
+using Client_app.Microservices;
 
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
@@ -89,7 +90,13 @@ try
     Environment.SetEnvironmentVariable("PGTARGETSESSIONATTR", null);
 
     var builder = WebApplication.CreateBuilder(args);
-    builder.WebHost.UseUrls("http://0.0.0.0:5000");
+    var dotnetServiceName = DotnetServiceTopology.ResolveServiceName(builder.Configuration);
+    var dotnetServicePort = int.TryParse(
+        Environment.GetEnvironmentVariable("DOTNET_SERVICE_PORT"),
+        out var configuredServicePort)
+        ? configuredServicePort
+        : 5000;
+    builder.WebHost.UseUrls($"http://0.0.0.0:{dotnetServicePort}");
     builder.Host.UseSerilog();
 
 
@@ -102,8 +109,36 @@ try
     if (!string.IsNullOrEmpty(replicaConn)) configOverrides["ConnectionStrings:ReplicaConnection"] = stripRegex.Replace(replicaConn, "");
     if (!string.IsNullOrEmpty(postgresConn)) configOverrides["ConnectionStrings:PostgresConnection"] = stripRegex.Replace(postgresConn, "");
 
+    var postgresHost = Environment.GetEnvironmentVariable("POSTGRES_HOST");
+    var postgresPort = Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432";
+    var postgresDatabase = Environment.GetEnvironmentVariable("POSTGRES_DB");
+    var postgresUser = Environment.GetEnvironmentVariable("POSTGRES_USER");
+    var postgresPassword = Environment.GetEnvironmentVariable("POSTGRES_PASS");
+    if (!string.IsNullOrWhiteSpace(postgresHost)
+        && !string.IsNullOrWhiteSpace(postgresDatabase)
+        && !string.IsNullOrWhiteSpace(postgresUser)
+        && !string.IsNullOrWhiteSpace(postgresPassword))
+    {
+        var generatedConnection = new NpgsqlConnectionStringBuilder
+        {
+            Host = postgresHost,
+            Port = int.TryParse(postgresPort, out var parsedPostgresPort) ? parsedPostgresPort : 5432,
+            Database = postgresDatabase,
+            Username = postgresUser,
+            Password = postgresPassword,
+            Pooling = true
+        }.ConnectionString;
+        configOverrides["ConnectionStrings:MasterConnection"] = generatedConnection;
+        configOverrides["ConnectionStrings:ReplicaConnection"] = generatedConnection;
+        configOverrides["ConnectionStrings:PostgresConnection"] = generatedConnection;
+    }
+
     var internalApiKey = Environment.GetEnvironmentVariable("INTERNAL_API_KEY");
     if (!string.IsNullOrEmpty(internalApiKey)) configOverrides["InternalApiKey"] = internalApiKey;
+    var ipfsEncryptionKey = Environment.GetEnvironmentVariable("IPFS_ENCRYPTION_KEY");
+    if (!string.IsNullOrEmpty(ipfsEncryptionKey)) configOverrides["IpfsEncryptionKey"] = ipfsEncryptionKey;
+    var vaultPassword = Environment.GetEnvironmentVariable("VAULT_PASSWORD");
+    if (!string.IsNullOrEmpty(vaultPassword)) configOverrides["VaultPassword"] = vaultPassword;
 
     builder.Configuration.AddInMemoryCollection(configOverrides);
 
@@ -118,7 +153,80 @@ try
         });
     });
 
-    builder.Services.AddControllers();
+    if (dotnetServiceName == DotnetServiceTopology.Gateway)
+    {
+        var gatewayConfiguration = DotnetServiceTopology.BuildGatewayConfiguration(builder.Configuration);
+        builder.Services
+            .AddReverseProxy()
+            .LoadFromMemory(gatewayConfiguration.Routes, gatewayConfiguration.Clusters);
+        builder.Services.AddHttpClient("DotnetGatewayReadiness", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(3);
+        });
+        builder.Services.AddProblemDetails();
+
+        var gatewayApp = builder.Build();
+        gatewayApp.UseSerilogRequestLogging();
+        gatewayApp.UseCors("AllowFrontend");
+        gatewayApp.Use(async (context, next) =>
+        {
+            context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            context.Response.Headers["X-Frame-Options"] = "DENY";
+            context.Response.Headers["Referrer-Policy"] = "no-referrer";
+            await next();
+        });
+        gatewayApp.MapGet("/health", () => Results.Ok(new
+        {
+            status = "healthy",
+            service = "dotnet-api-gateway",
+            architecture = "microservices"
+        }));
+        gatewayApp.MapGet("/api/backend/health", () => Results.Ok(new
+        {
+            status = "healthy",
+            service = "dotnet-api-gateway",
+            architecture = "microservices"
+        }));
+        gatewayApp.MapGet("/api/ready", async (IHttpClientFactory httpClientFactory, CancellationToken cancellationToken) =>
+        {
+            var client = httpClientFactory.CreateClient("DotnetGatewayReadiness");
+            var checks = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            var isReady = true;
+
+            foreach (var destination in DotnetServiceTopology.GatewayDestinations(builder.Configuration))
+            {
+                try
+                {
+                    using var response = await client.GetAsync($"{destination.Value.TrimEnd('/')}/health", cancellationToken);
+                    var healthy = response.IsSuccessStatusCode;
+                    checks[destination.Key] = new { ready = healthy, statusCode = (int)response.StatusCode };
+                    isReady &= healthy;
+                }
+                catch (Exception exception)
+                {
+                    checks[destination.Key] = new { ready = false, error = exception.Message };
+                    isReady = false;
+                }
+            }
+
+            return Results.Json(
+                new { status = isReady ? "ready" : "not_ready", services = checks },
+                statusCode: isReady ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
+        });
+        gatewayApp.MapReverseProxy();
+
+        Log.Information("ASP.NET microservice gateway configured for {ServiceCount} internal services", gatewayConfiguration.Clusters.Count);
+        gatewayApp.Run();
+        return;
+    }
+
+    var mvcBuilder = builder.Services.AddControllers();
+    var allowedControllers = DotnetServiceTopology.ControllersFor(dotnetServiceName);
+    if (allowedControllers is not null)
+    {
+        mvcBuilder.ConfigureApplicationPartManager(manager =>
+            manager.FeatureProviders.Add(new ServiceControllerFeatureProvider(allowedControllers)));
+    }
     builder.Services.AddMemoryCache();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
@@ -262,7 +370,10 @@ try
     {
         client.Timeout = TimeSpan.FromSeconds(10);
     });
-    builder.Services.AddHostedService<BackendKeepAliveService>();
+    if (DotnetServiceTopology.RunsKeepAlive(dotnetServiceName))
+    {
+        builder.Services.AddHostedService<BackendKeepAliveService>();
+    }
     builder.Services.AddScoped<IFabricCaAuthService, FabricCaAuthService>();
     builder.Services.AddScoped<IEmailService, EmailService>();
     builder.Services.AddScoped<IAuditLogService, AuditLogService>();
@@ -336,13 +447,30 @@ try
 
     app.UseAuthentication();
     app.UseAuthorization();
-    app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "blockgo-backend" }));
-    app.MapGet("/api/backend/health", () => Results.Ok(new { status = "healthy", service = "blockgo-backend" }));
+    app.MapGet("/health", () => Results.Ok(new
+    {
+        status = "healthy",
+        service = $"dotnet-{dotnetServiceName}-service",
+        architecture = dotnetServiceName == DotnetServiceTopology.Monolith ? "monolith" : "microservices"
+    }));
+    app.MapGet("/api/ready", () => Results.Ok(new
+    {
+        status = "ready",
+        service = $"dotnet-{dotnetServiceName}-service"
+    }));
+    app.MapGet("/api/backend/health", () => Results.Ok(new
+    {
+        status = "healthy",
+        service = $"dotnet-{dotnetServiceName}-service"
+    }));
     app.MapControllers();
-    Log.Information("Application configured successfully");
+    Log.Information("ASP.NET service {ServiceName} configured successfully", dotnetServiceName);
     Log.Information("Listening on {Urls}", string.Join(", ", app.Urls));
-    app.MapHub<ChatHub>("/chatHub");
-    app.MapHub<ChatHub>("/api/chatHub");
+    if (DotnetServiceTopology.HostsRealtimeHub(dotnetServiceName))
+    {
+        app.MapHub<ChatHub>("/chatHub");
+        app.MapHub<ChatHub>("/api/chatHub");
+    }
 
     app.Run();
 }

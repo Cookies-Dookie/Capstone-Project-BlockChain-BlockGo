@@ -301,8 +301,8 @@ const recordSecurityEvent = async (req, eventType, severity, attemptedIdentity, 
 async function getWallet(role = 'registrar') {
     const normalizedRole = normalizeAuthRole(role);
     let couchUrl;
-    const user = process.env.COUCHDB_USER || 'capstone';
-    const pass = process.env.COUCHDB_PASS || 'pass123';
+    const user = process.env.COUCHDB_USER || 'PLVADMIN';
+    const pass = process.env.COUCHDB_PASS || 'PLVSYSTEM2026';
     const host = (fs.existsSync('/.dockerenv') || fs.existsSync('/var/run/secrets/kubernetes.io')) ? 'host.docker.internal' : '127.0.0.1';
 
     if (normalizedRole === 'faculty') {

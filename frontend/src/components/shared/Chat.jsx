@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as signalR from '@microsoft/signalr';
 import { getChatHubUrl } from '../../services/api';
+import { getAuthToken } from '../../services/authSession';
 import { pullSharedClientState } from '../../utils/sharedClientState';
 
 const roleKeyFromRoleString = (role) => {
@@ -455,7 +456,7 @@ const Chat = ({
   // SignalR lifecycle
   useEffect(() => {
     const chatUrl = getChatHubUrl();
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
 
     const conn = new signalR.HubConnectionBuilder()
       .withUrl(chatUrl, { accessTokenFactory: () => token || '' })

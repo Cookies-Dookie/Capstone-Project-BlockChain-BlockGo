@@ -1,5 +1,6 @@
 const fs = require('fs');
 const net = require('net');
+const tls = require('tls');
 const path = require('path');
 const { isContainerized, middlewareRoot, parsePositiveInt } = require('../shared/config');
 const { findIdentity } = require('./wallet-manager');
@@ -189,9 +190,26 @@ function cacheStats() {
 function checkSocket(name, endpointUrl) {
     const target = new URL(endpointUrl);
     return new Promise((resolve, reject) => {
-        const socket = net.createConnection({ host: target.hostname, port: Number(target.port) });
+        const secure = target.protocol === 'grpcs:' || target.protocol === 'https:';
+        const serverNames = {
+            registrar: 'peer0.registrar.capstone.com',
+            faculty: 'peer0.faculty.capstone.com',
+            department: 'peer0.department.capstone.com',
+            orderer: 'orderer.capstone.com'
+        };
+        const tlsRoot = secure ? (isContainerized() ? kubernetesTls(name) : localTls(name)) : '';
+        if (secure && !tlsRoot) {
+            reject(new Error(`${name} TLS root is unavailable for readiness validation.`));
+            return;
+        }
+
+        const options = { host: target.hostname, port: Number(target.port) };
+        const socket = secure
+            ? tls.connect({ ...options, ca: tlsRoot, servername: serverNames[name], rejectUnauthorized: true })
+            : net.createConnection(options);
+        const readyEvent = secure ? 'secureConnect' : 'connect';
         const timeout = setTimeout(() => socket.destroy(new Error(`${name} connection timed out.`)), Number(process.env.FABRIC_READINESS_TIMEOUT_MS || 2000));
-        socket.once('connect', () => { clearTimeout(timeout); socket.destroy(); resolve([name, 'reachable']); });
+        socket.once(readyEvent, () => { clearTimeout(timeout); socket.end(); resolve([name, secure ? 'tls-ready' : 'reachable']); });
         socket.once('error', (error) => { clearTimeout(timeout); reject(new Error(`${name} is unreachable: ${error.message}`)); });
     });
 }

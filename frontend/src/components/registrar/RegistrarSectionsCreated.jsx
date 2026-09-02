@@ -5,12 +5,14 @@ import {
   YEAR_LEVEL_PREFIXES,
   downloadStudentCsvFile,
   getDefaultSectionName,
+  getNextStudentId,
   getStudentMiddleName,
   parseStudentIdSpreadsheet,
   syncSectionedStudentsToStorage,
 } from "../../utils/studentSectioningHelpers";
 import { syncSectioningBatchesToBackend } from "../../utils/registrarSectioningBackendSync";
 import { pushSectioningSharedState } from "../../utils/sharedClientState";
+import { fetchNextStudentId } from "../../services/api";
 
 const GRADUATING_STUDENTS_KEY = "graduatingStudents";
 const IRREGULAR_SUBJECTS_KEY = "irregularSubjectAssignments";
@@ -111,12 +113,14 @@ function RegistrarSectionsCreated() {
   const [overviewYear, setOverviewYear] = useState("All");
   const [pendingRemoval, setPendingRemoval] = useState(null);
   const [studentForm, setStudentForm] = useState({
-    studentId: "",
     sex: "",
     lastName: "",
     firstName: "",
     middleName: "",
   });
+  const [persistedSequences, setPersistedSequences] = useState({});
+  const [studentIdLoading, setStudentIdLoading] = useState(false);
+  const [studentIdError, setStudentIdError] = useState("");
   const [changedDepartments, setChangedDepartments] = useState(() => new Set());
 
   const persistBatches = (nextBatches) => {
@@ -211,6 +215,50 @@ function RegistrarSectionsCreated() {
     ) ||
     departmentBatches[0] ||
     null;
+  const studentIdYear = String(selectedBatch?.batchYear || "").match(/^\d{4}/)?.[0] || "";
+  const hasPersistedSequence = Object.prototype.hasOwnProperty.call(
+    persistedSequences,
+    studentIdYear
+  );
+  const automaticStudentId = useMemo(
+    () => hasPersistedSequence
+      ? getNextStudentId(
+          selectedBatch?.batchYear,
+          batches,
+          persistedSequences[studentIdYear]
+        )
+      : "",
+    [batches, hasPersistedSequence, persistedSequences, selectedBatch?.batchYear, studentIdYear]
+  );
+  const studentIdLimitReached = hasPersistedSequence && !automaticStudentId;
+
+  useEffect(() => {
+    if (!studentIdYear || Object.prototype.hasOwnProperty.call(persistedSequences, studentIdYear)) {
+      return;
+    }
+
+    let cancelled = false;
+    setStudentIdError("");
+    setStudentIdLoading(true);
+    fetchNextStudentId(studentIdYear)
+      .then((response) => {
+        if (cancelled) return;
+        setPersistedSequences((current) => ({
+          ...current,
+          [studentIdYear]: Number(response?.highestSequence) || 0,
+        }));
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("Could not load the persisted student ID sequence.", error);
+        setStudentIdError("Automatic Student ID is unavailable. Please retry after the server connection is restored.");
+      })
+      .finally(() => {
+        if (!cancelled) setStudentIdLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [persistedSequences, studentIdYear]);
   const yearSections = (selectedBatch?.sectionPlans || []).filter((section) =>
     sectionMatchesYearLevel(section, activeYearLevel)
   );
@@ -508,7 +556,7 @@ function RegistrarSectionsCreated() {
 
   const handleAddStudent = () => {
     if (!selectedBatch || !selectedSection) return;
-    const studentId = studentForm.studentId.trim();
+    const studentId = automaticStudentId;
 
     if (
       !studentId ||
@@ -550,7 +598,6 @@ function RegistrarSectionsCreated() {
       lastSectionedAt: new Date().toISOString(),
     }));
     setStudentForm({
-      studentId: "",
       sex: "",
       lastName: "",
       firstName: "",
@@ -1159,15 +1206,16 @@ function RegistrarSectionsCreated() {
                       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
                         <input
                           type="text"
-                          value={studentForm.studentId}
-                          onChange={(event) =>
-                            setStudentForm((current) => ({
-                              ...current,
-                              studentId: event.target.value,
-                            }))
-                          }
-                          placeholder="Student ID"
-                          className="rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-[#003366]"
+                          value={automaticStudentId}
+                          readOnly
+                          aria-label="Student ID (automatic)"
+                          title="Student ID is assigned automatically from the batch year"
+                          placeholder={studentIdLoading
+                            ? "Loading Student ID…"
+                            : studentIdError || (studentIdLimitReached
+                                ? `${studentIdYear}-year ID limit (9999) reached`
+                                : "Select a valid batch year")}
+                          className="cursor-not-allowed rounded-xl border border-slate-300 bg-slate-100 px-4 py-3 text-sm text-slate-700 outline-none"
                         />
                         <select
                           value={studentForm.sex}
@@ -1205,7 +1253,8 @@ function RegistrarSectionsCreated() {
                         <button
                           type="button"
                           onClick={handleAddStudent}
-                          className="rounded-xl bg-[#003366] px-5 py-3 text-sm font-semibold text-white hover:bg-[#00264d]"
+                          disabled={studentIdLoading || !automaticStudentId}
+                          className="rounded-xl bg-[#003366] px-5 py-3 text-sm font-semibold text-white hover:bg-[#00264d] disabled:cursor-not-allowed disabled:bg-slate-300"
                         >
                           Add Student
                         </button>

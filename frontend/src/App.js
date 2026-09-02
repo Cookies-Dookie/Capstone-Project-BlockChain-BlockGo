@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import "./assets/style.css"; 
 import "./assets/App.css";   
 import Login from "./components/shared/Login";
@@ -11,73 +11,55 @@ import SystemAdminPortal from './components/system-admin/SystemAdminPortal';
 import Chat from './components/shared/Chat';
 import { startNginxFailoverMonitor } from './services/nginxFailover';
 import { getLocalDevUser } from './utils/localDevAuth';
+import {
+  clearAuthSession,
+  decodeAuthToken,
+  migrateLegacyAuthSession,
+  normalizeSessionRole,
+  roleForRoute,
+  routeForRole,
+  setAuthSession,
+} from './services/authSession';
 
-import { BrowserRouter as Router } from 'react-router-dom';
+import { BrowserRouter as Router, useLocation, useNavigate } from 'react-router-dom';
 import { NotificationProvider, useNotification } from './services/NotificationContext';
 
-const normalizeAppRole = (role) => {
-  const normalized = String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (normalized === 'system_admin' || normalized === 'systemadmin' || normalized === 'system_administrator' || normalized === 'systemadministrator') {
-    return 'system_admin';
-  }
-  if (normalized === 'dept_admin' || normalized === 'deptadmin' || normalized === 'department_admin' || normalized === 'departmentadmin' || normalized === 'department' || normalized === 'chairperson' || normalized === 'department_head' || normalized === 'admin' || normalized === 'departmentmsp') {
-    return 'department_admin';
-  }
-  if (normalized === 'facultymsp') return 'faculty';
-  if (normalized === 'registrarmsp') return 'registrar';
-  return normalized;
-};
+const normalizeAppRole = normalizeSessionRole;
 
 function AppContent() {
   const [user, setUser] = useState(null);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatUnreadTotal, setChatUnreadTotal] = useState(0);
   const [latestChatNotice, setLatestChatNotice] = useState(null);
   const [chatAutoOpenTarget, setChatAutoOpenTarget] = useState(null);
   const { addNotification } = useNotification();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const restorationStarted = useRef(false);
 
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      try {
-        const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-        JSON.parse(atob(base64));
-        handleLoginSuccess(token);
-      } catch (e) {
-        localStorage.removeItem('token');
-      }
-    }
-  }, []);
-
-  const handleLoginSuccess = async (token) => { // Made async
-    localStorage.setItem('token', token);
+  const handleLoginSuccess = useCallback(async (token) => {
     try {
-      // Decode the JWT to securely get the username and role signed by the backend
-      const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-      const payload = JSON.parse(atob(base64));
-      
-      // Log the payload to the console so you can see exactly what keys your backend uses
-      console.log("Decoded Token Payload:", payload);
-
+      const payload = decodeAuthToken(token);
       const localDevUser = getLocalDevUser(payload);
       if (localDevUser) {
-        localStorage.setItem('userRole', localDevUser.role);
+        setAuthSession(token, localDevUser.role);
         setUser(localDevUser);
+        navigate(routeForRole(localDevUser.role), { replace: true });
         return;
       }
-      
-      // Add safe fallbacks for standard JWT structures
+
       const email = payload.username || payload.email || payload['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'];
       const dbRole = normalizeAppRole(payload.dbRole || payload.role || payload['http://schemas.microsoft.com/ws/2008/06/identity/claims/role']);
+      setAuthSession(token, dbRole);
 
-      // Fetch full user profile from the backend
       const profileResponse = await fetchUserProfile(email, dbRole);
 
       if (profileResponse.status === 'Success' && profileResponse.data) {
         const fetchedUser = profileResponse.data;
         const appRole = normalizeAppRole(fetchedUser.role || dbRole);
-        
-        // Determine display name based on role
+        setAuthSession(token, appRole);
+
         let displayName = fetchedUser.fullName;
         if (appRole === 'faculty') {
           displayName = `Prof. ${fetchedUser.fullName}`;
@@ -89,10 +71,9 @@ function AppContent() {
           displayName = fetchedUser.fullName || 'System Administrator';
         }
 
-        // Set the user state with the fetched data
         setUser({
           id: fetchedUser.id,
-          name: displayName, // Use the formatted display name
+          name: displayName,
           email: fetchedUser.email,
           role: appRole,
           rawRole: fetchedUser.role,
@@ -115,41 +96,66 @@ function AppContent() {
           enrolledSubjects: fetchedUser.enrolledSubjects,
           facultyType: fetchedUser.facultyType,
           Classification: fetchedUser.facultyType || fetchedUser.classification,
-          status: fetchedUser.status // Add status if needed
+          status: fetchedUser.status
         });
+        navigate(routeForRole(appRole), { replace: true });
       } else {
-        console.error("Failed to fetch user profile:", profileResponse.message);
         throw new Error("Failed to load user profile.");
       }
     } catch (error) {
       console.error("Error during login process:", error);
-      if (error instanceof SyntaxError) {
-        console.error("Invalid token format. It could not be parsed.");
-        localStorage.removeItem('token');
-      }
+      clearAuthSession();
       setUser(null);
+      navigate('/login', { replace: true });
+      throw error;
+    } finally {
+      setIsRestoringSession(false);
     }
-  };
+  }, [navigate]);
+
+  useEffect(() => {
+    if (restorationStarted.current) return undefined;
+    restorationStarted.current = true;
+    let active = true;
+    const token = migrateLegacyAuthSession();
+    if (!token) {
+      setIsRestoringSession(false);
+      const isPublicAuthRoute = location.pathname === '/login' || location.pathname.startsWith('/reset-password');
+      if (!isPublicAuthRoute) navigate('/login', { replace: true });
+      return () => { active = false; };
+    }
+
+    handleLoginSuccess(token).catch(() => {
+      if (active) setIsRestoringSession(false);
+    });
+    return () => { active = false; };
+  }, [handleLoginSuccess, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (isRestoringSession || !user) return;
+    const currentRouteRole = roleForRoute(location.pathname);
+    const userRole = normalizeAppRole(user.role);
+    if (currentRouteRole !== userRole) navigate(routeForRole(userRole), { replace: true });
+  }, [isRestoringSession, location.pathname, navigate, user]);
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userRole');
+    clearAuthSession();
     setUser(null);
     setChatUnreadTotal(0);
     setLatestChatNotice(null);
     setChatAutoOpenTarget(null);
+    navigate('/login', { replace: true });
   };
 
   const handleNginxFailover = useCallback((nextOrigin) => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userRole');
+    clearAuthSession();
     setUser(null);
     setChatUnreadTotal(0);
     setLatestChatNotice(null);
     setChatAutoOpenTarget(null);
 
     const from = encodeURIComponent(window.location.origin);
-    window.location.replace(`${nextOrigin}/?failover=nginx&from=${from}`);
+    window.location.replace(`${nextOrigin}/login?failover=nginx&from=${from}`);
   }, []);
 
   useEffect(() => {
@@ -198,7 +204,9 @@ function AppContent() {
 
   return (
     <div className="main-app-wrapper">
-      {!user ? (
+      {isRestoringSession ? (
+        <div className="flex min-h-screen items-center justify-center bg-slate-100 text-sm font-semibold text-slate-600">Restoring this tab's session...</div>
+      ) : !user ? (
         <Login onLogin={handleLoginSuccess} />
       ) : (
         <>
@@ -251,7 +259,7 @@ function AppContent() {
             <FacultyPortal facultyData={user} onLogout={handleLogout} />
           ) : currentUserRole === "department_admin" ? (
             <div style={{ position: 'relative', width: '100%', minHeight: '100vh', backgroundColor: '#f0f2f5' }}>
-              <DeptAdminGradesView loggedInEmail={user.email ?? ''} loggedInName={user.name ?? ''} userRole={currentUserRole} department={user.department ?? ''} />
+              <DeptAdminGradesView loggedInEmail={user.email ?? ''} loggedInName={user.name ?? ''} userRole={currentUserRole} department={user.department ?? ''} onLogout={handleLogout} />
             </div>
           ) : currentUserRole === "registrar" ? (
             <div style={{ position: 'relative', width: '100%', minHeight: '100vh', backgroundColor: '#f0f2f5' }}>
@@ -261,6 +269,7 @@ function AppContent() {
                 chatUnreadCount={chatUnreadTotal}
                 latestChatNotice={latestChatNotice}
                 onOpenChat={() => setIsChatOpen(true)}
+                onLogout={handleLogout}
               />
             </div>
           ) : currentUserRole === "system_admin" ? (

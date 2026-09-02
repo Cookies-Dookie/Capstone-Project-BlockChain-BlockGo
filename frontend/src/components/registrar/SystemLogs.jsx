@@ -1,5 +1,29 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { fetchAcademicPrograms, fetchSystemLogs } from "../../services/api";
+
+const TRANSACTIONS_PER_PAGE = 10;
+const PAGE_BUTTONS_PER_GROUP = 5;
+
+const getVisiblePageNumbers = (currentPage, totalPages) => {
+  if (totalPages <= PAGE_BUTTONS_PER_GROUP) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const calculatedGroupStart = Math.floor((currentPage - 1) / PAGE_BUTTONS_PER_GROUP)
+    * PAGE_BUTTONS_PER_GROUP + 1;
+  const isFinalGroup = calculatedGroupStart + PAGE_BUTTONS_PER_GROUP - 1 >= totalPages;
+  const groupStart = isFinalGroup
+    ? Math.max(1, totalPages - PAGE_BUTTONS_PER_GROUP + 1)
+    : calculatedGroupStart;
+  const pageNumbers = Array.from(
+    { length: PAGE_BUTTONS_PER_GROUP },
+    (_, index) => groupStart + index
+  );
+
+  return isFinalGroup
+    ? ["ellipsis-first", ...pageNumbers]
+    : [...pageNumbers, "ellipsis-last"];
+};
 
 const humanizeLabel = (value = "") => String(value)
   .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -151,6 +175,8 @@ function SystemLogs({ grades = [] }) {
   const [sectionFilter, setSectionFilter] = useState("All");
   const [courseFilter, setCourseFilter] = useState("All");
   const [termFilter, setTermFilter] = useState("All");
+  const [currentPage, setCurrentPage] = useState(1);
+  const hasOpenedTransactionLogs = useRef(false);
 
   useEffect(() => {
     const fetchLogs = async () => {
@@ -275,6 +301,29 @@ function SystemLogs({ grades = [] }) {
     return matchesSearch && matchesDate && matchesYear && matchesSection && matchesCourse && matchesTerm;
   });
 
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / TRANSACTIONS_PER_PAGE));
+  const visiblePageNumbers = getVisiblePageNumbers(currentPage, totalPages);
+  const pageStartIndex = (currentPage - 1) * TRANSACTIONS_PER_PAGE;
+  const paginatedLogs = filteredLogs.slice(pageStartIndex, pageStartIndex + TRANSACTIONS_PER_PAGE);
+  const firstVisibleTransaction = filteredLogs.length === 0 ? 0 : pageStartIndex + 1;
+  const lastVisibleTransaction = Math.min(pageStartIndex + TRANSACTIONS_PER_PAGE, filteredLogs.length);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, dateFilter, yearFilter, sectionFilter, courseFilter, termFilter]);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    setCurrentPage((page) => {
+      if (!hasOpenedTransactionLogs.current) {
+        hasOpenedTransactionLogs.current = true;
+        return totalPages;
+      }
+      return Math.min(page, totalPages);
+    });
+  }, [isLoading, totalPages]);
+
   const showAllTransactions = () => {
     setSearchTerm("");
     setDateFilter("");
@@ -282,6 +331,7 @@ function SystemLogs({ grades = [] }) {
     setSectionFilter("All");
     setCourseFilter("All");
     setTermFilter("All");
+    setCurrentPage(1);
   };
 
   const handleExportPDF = () => {
@@ -435,7 +485,7 @@ function SystemLogs({ grades = [] }) {
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
         <p className="text-sm font-medium text-slate-600">
-          Showing <span className="font-bold text-[#003366]">{filteredLogs.length}</span> of {logsWithMetadata.length} transactions
+          Showing <span className="font-bold text-[#003366]">{firstVisibleTransaction}-{lastVisibleTransaction}</span> of {filteredLogs.length} filtered transactions
         </p>
         <button
           type="button"
@@ -463,7 +513,7 @@ function SystemLogs({ grades = [] }) {
             ) : filteredLogs.length === 0 ? (
               <tr><td colSpan="5" className="px-6 py-10 text-center text-slate-400">No activity logs found.</td></tr>
             ) : (
-              filteredLogs.map((log) => (
+              paginatedLogs.map((log) => (
                 <tr key={log.id} className="hover:bg-slate-50">
                   <td className="px-6 py-4 font-mono text-xs">{new Date(log.timestamp).toLocaleString()}</td>
                   <td className="px-6 py-4 font-semibold">{log.approvedBy}</td>
@@ -490,6 +540,57 @@ function SystemLogs({ grades = [] }) {
           </tbody>
         </table>
       </div>
+
+      {!isLoading && filteredLogs.length > 0 ? (
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center justify-center gap-2" aria-label="Transaction log pagination">
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={currentPage === 1}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-[#003366] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Previous
+            </button>
+            {visiblePageNumbers.map((page) => (
+              typeof page === "number" ? (
+                <button
+                  key={page}
+                  type="button"
+                  aria-label={`Go to page ${page}`}
+                  aria-current={currentPage === page ? "page" : undefined}
+                  onClick={() => setCurrentPage(page)}
+                  className={`min-w-10 rounded-lg border px-3 py-2 text-sm font-bold transition ${
+                    currentPage === page
+                      ? "border-[#003366] bg-[#003366] text-white"
+                      : "border-slate-300 bg-white text-[#003366] hover:bg-blue-50"
+                  }`}
+                >
+                  {page}
+                </button>
+              ) : (
+                <button
+                  key={page}
+                  type="button"
+                  aria-label={page === "ellipsis-first" ? "Go to first page" : "Go to last page"}
+                  onClick={() => setCurrentPage(page === "ellipsis-first" ? 1 : totalPages)}
+                  className="min-w-10 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-500 transition hover:bg-blue-50 hover:text-[#003366]"
+                >
+                  &hellip;
+                </button>
+              )
+            ))}
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={currentPage === totalPages}
+              className="rounded-lg bg-[#003366] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#00264d] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

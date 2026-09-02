@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, openDecryptedIpfsFile, getSystemSetting, resetEncodingSeason, correctFinalizedGradeAsRegistrar } from '../../services/api';
+import { fetchAllGrades, finalizeGrade, fetchPendingRequests, approveRegistrationRequest, denyRegistrationRequest, fetchApprovedStudents, assignStudent, fetchApprovedAdmins, assignDepartmentAdmin, revokeDepartmentAdmin, fetchApprovedFaculties, assignFaculty, dropStudent, revokeFaculty, openDecryptedIpfsFile, getSystemSetting, resetEncodingSeason } from '../../services/api';
 import RegistrarHeader from './RegistrarHeader';
 import RegistrarSidebar from './RegistrarSidebar';
 import RegistrarDashboard from './RegistrarDashboard';
@@ -24,6 +24,7 @@ const RegistrarGradesView = ({
     chatUnreadCount = 0,
     latestChatNotice = null,
     onOpenChat,
+    onLogout,
 }) => {
     const managementMenuItems = [
         { id: 'grades', label: 'Grades Ledger' },
@@ -72,9 +73,6 @@ const RegistrarGradesView = ({
     const [selectedFacultyDepartment, setSelectedFacultyDepartment] = useState('');
     const [selectedFacultyReview, setSelectedFacultyReview] = useState('');
     const [openedFacultySections, setOpenedFacultySections] = useState({});
-    const [gradeCorrection, setGradeCorrection] = useState(null);
-    const [gradeCorrectionSaving, setGradeCorrectionSaving] = useState(false);
-    const [gradeCorrectionNotice, setGradeCorrectionNotice] = useState(null);
 
     const revocationPreviewSections = [
         {
@@ -452,45 +450,6 @@ const RegistrarGradesView = ({
         setVaultPassword("");
         setShowVaultPassword(false);
         setIpfsModalOpen(true);
-    };
-
-    const openGradeCorrection = (record) => {
-        const term = String(record.term || '').toLowerCase() === 'midterm' || (!record.finals && record.midterm) ? 'midterm' : 'finals';
-        setGradeCorrectionNotice(null);
-        setGradeCorrection({
-            record,
-            term,
-            newGrade: term === 'midterm' ? record.midterm : record.finals,
-            reason: '',
-        });
-    };
-
-    const submitGradeCorrection = async (event) => {
-        event.preventDefault();
-        const numericGrade = Number(gradeCorrection?.newGrade);
-        if (!Number.isFinite(numericGrade) || numericGrade < 0 || numericGrade > 100) {
-            setGradeCorrectionNotice({ type: 'error', message: 'Enter a grade between 0 and 100.' });
-            return;
-        }
-        if ((gradeCorrection?.reason || '').trim().length < 5) {
-            setGradeCorrectionNotice({ type: 'error', message: 'Enter a correction reason of at least 5 characters.' });
-            return;
-        }
-        setGradeCorrectionSaving(true);
-        setGradeCorrectionNotice(null);
-        try {
-            const response = await correctFinalizedGradeAsRegistrar(gradeCorrection.record.id, {
-                newGrade: numericGrade,
-                term: gradeCorrection.term,
-                reason: gradeCorrection.reason.trim(),
-            });
-            setGradeCorrectionNotice({ type: 'success', message: `${response?.message || 'Grade corrected.'} Ledger status: Finalized.` });
-            await loadGrades();
-        } catch (error) {
-            setGradeCorrectionNotice({ type: 'error', message: error.message || 'Unable to correct the selected grade.' });
-        } finally {
-            setGradeCorrectionSaving(false);
-        }
     };
 
     const submitIpfsPassword = async () => {
@@ -902,7 +861,7 @@ const RegistrarGradesView = ({
 
     return (
         <div className="flex h-screen w-full flex-col bg-slate-50 font-sans fixed inset-0 z-[100] overflow-auto">
-            <RegistrarHeader registrarData={{ name: loggedInName, semester: activeSemester }} onLogout={() => { localStorage.removeItem('token'); window.location.reload(); }} />
+            <RegistrarHeader registrarData={{ name: loggedInName, semester: activeSemester }} onLogout={onLogout} />
             <div className="flex flex-col md:flex-row flex-1 overflow-hidden p-4 md:p-6 gap-6">
                 <RegistrarSidebar
                     activeTab={mainTab}
@@ -1143,7 +1102,6 @@ const RegistrarGradesView = ({
                                                                                         </td>
                                                                                         <td className="p-4">
                                                                                             <div className="flex flex-col items-start gap-2">
-                                                                                                {String(record.status || '').toLowerCase() === 'finalized' ? <button type="button" onClick={() => openGradeCorrection(record)} className="font-bold text-amber-700 hover:underline">Correct Grade</button> : null}
                                                                                                 {(record.ipfs_cid || record.IpfsCID) ? <button onClick={() => handleViewIpfs(record.ipfs_cid || record.IpfsCID)} className="font-bold text-blue-600 hover:underline">View File</button> : <span className="text-xs text-slate-400">No File</span>}
                                                                                             </div>
                                                                                         </td>
@@ -1636,21 +1594,6 @@ const RegistrarGradesView = ({
                         <button onClick={confirmModal.onConfirm} className={`rounded-xl px-5 py-2.5 text-sm font-bold text-white transition ${confirmModal.isDestructive ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>Confirm</button>
                     </div>
                 </div>
-            </Modal>
-            <Modal isOpen={!!gradeCorrection} onClose={() => { if (!gradeCorrectionSaving) setGradeCorrection(null); }} title="Correct Finalized Student Grade">
-                {gradeCorrection ? <form onSubmit={submitGradeCorrection} className="flex flex-col gap-4">
-                    <div className="rounded-xl bg-blue-50 p-4 text-sm text-slate-700">
-                        <p><span className="font-bold">Student:</span> {gradeCorrection.record.studentDisplayName} ({gradeCorrection.record.studentDisplayId})</p>
-                        <p><span className="font-bold">Tagged subject:</span> {gradeCorrection.record.subject_code} — {gradeCorrection.record.subject_title || gradeCorrection.record.subject_name || 'Untitled subject'}</p>
-                        <p><span className="font-bold">Ledger record:</span> <span className="font-mono text-xs">{gradeCorrection.record.id}</span></p>
-                    </div>
-                    {gradeCorrectionNotice ? <div className={`rounded-lg p-3 text-sm ${gradeCorrectionNotice.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'}`}>{gradeCorrectionNotice.message}</div> : null}
-                    <label className="text-sm font-semibold text-slate-700">Term<select value={gradeCorrection.term} onChange={(event) => setGradeCorrection({ ...gradeCorrection, term: event.target.value, newGrade: event.target.value === 'midterm' ? gradeCorrection.record.midterm : gradeCorrection.record.finals })} className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 font-normal"><option value="midterm">Midterm</option><option value="finals">Finals</option></select></label>
-                    <label className="text-sm font-semibold text-slate-700">New Raw Grade (0–100)<input required type="number" min="0" max="100" step="0.01" value={gradeCorrection.newGrade || ''} onChange={(event) => setGradeCorrection({ ...gradeCorrection, newGrade: event.target.value })} className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" /></label>
-                    <label className="text-sm font-semibold text-slate-700">Correction Reason<textarea required minLength="5" value={gradeCorrection.reason} onChange={(event) => setGradeCorrection({ ...gradeCorrection, reason: event.target.value })} rows="3" className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 font-normal" placeholder="Explain why this finalized grade is being corrected" /></label>
-                    <p className="text-xs text-slate-500">Submitting creates a complete Returned → Corrected → Approved → Finalized history on the ledger. The student portal will show the raw grade separately from its college equivalent.</p>
-                    <div className="flex justify-end gap-3"><button type="button" disabled={gradeCorrectionSaving} onClick={() => setGradeCorrection(null)} className="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-bold">Cancel</button><button disabled={gradeCorrectionSaving} className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-slate-900 disabled:opacity-50">{gradeCorrectionSaving ? 'Committing…' : 'Commit Corrected Grade'}</button></div>
-                </form> : null}
             </Modal>
         </div>
     );

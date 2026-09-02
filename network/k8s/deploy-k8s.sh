@@ -10,7 +10,8 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+cd "$(dirname "$SCRIPT_SOURCE")/.."
 
 PROFILE="${K8S_PROFILE:-local}"
 ACTION="${1:-apply}"
@@ -203,14 +204,100 @@ configure_local_observability_resources() {
     if [[ "$PROFILE" != "local" ]]; then
         return
     fi
-    echo "Applying low scheduler requests for the single-node local observability stack..."
-    local deployment
-    for deployment in prometheus kube-state-metrics loki alloy grafana; do
-        kubectl set resources deployment/$deployment -n plv-fabric \
-            --requests=cpu=10m,memory=16Mi >/dev/null
+    echo "Applying bounded memory settings for the single-node local observability stack..."
+    set_local_memory deployment prometheus plv-fabric 64Mi 384Mi
+    set_local_memory deployment kube-state-metrics plv-fabric 16Mi 128Mi
+    set_local_memory deployment loki plv-fabric 64Mi 256Mi
+    set_local_memory deployment alloy plv-fabric 64Mi 256Mi
+    set_local_memory deployment grafana plv-fabric 128Mi 512Mi
+    set_local_memory deployment postgres-exporter plv-main-campus 16Mi 64Mi
+}
+
+set_local_memory() {
+    local resource_kind="$1"
+    local resource_name="$2"
+    local namespace="$3"
+    local memory_request="$4"
+    local memory_limit="$5"
+
+    if ! kubectl get "${resource_kind}/${resource_name}" -n "$namespace" >/dev/null 2>&1; then
+        return
+    fi
+
+    kubectl set resources "${resource_kind}/${resource_name}" -n "$namespace" \
+        --requests="memory=${memory_request}" \
+        --limits="memory=${memory_limit}" >/dev/null
+}
+
+remove_local_production_resource_policies() {
+    if [[ "$PROFILE" != "local" ]]; then
+        return
+    fi
+
+    # Production LimitRanges inject 128-256 MiB requests and 512 MiB-1 GiB
+    # limits into every otherwise-unbounded container. When a production
+    # deployment is later reused locally, those defaults can reserve nearly an
+    # entire 8 GiB Docker Desktop node before the workloads use the memory.
+    echo "Removing production-only quotas and default limits from the local namespaces..."
+    local namespace
+    for namespace in "${NAMESPACES[@]}"; do
+        kubectl delete resourcequota --all -n "$namespace" --ignore-not-found >/dev/null
+        kubectl delete limitrange --all -n "$namespace" --ignore-not-found >/dev/null
     done
-    kubectl set resources deployment/postgres-exporter -n plv-main-campus \
-        --requests=cpu=10m,memory=16Mi >/dev/null
+}
+
+configure_local_workload_resources() {
+    if [[ "$PROFILE" != "local" ]]; then
+        return
+    fi
+
+    echo "Applying the local 8 GiB workload memory budget..."
+
+    set_local_memory statefulset postgres-primary plv-main-campus 64Mi 384Mi
+
+    set_local_memory deployment fabric-ca-registrar plv-main-campus 32Mi 256Mi
+    set_local_memory deployment fabric-ca-faculty plv-annex-campus 32Mi 256Mi
+    set_local_memory deployment fabric-ca-department plv-pubad-campus 32Mi 256Mi
+
+    set_local_memory deployment orderer-1 plv-main-campus 64Mi 256Mi
+    set_local_memory deployment orderer-2 plv-main-campus 64Mi 256Mi
+    set_local_memory deployment orderer-3 plv-annex-campus 64Mi 256Mi
+
+    set_local_memory deployment peer-registrar plv-main-campus 64Mi 512Mi
+    set_local_memory deployment peer-faculty plv-annex-campus 64Mi 512Mi
+    set_local_memory deployment peer-department plv-pubad-campus 64Mi 512Mi
+
+    set_local_memory statefulset couchdb-registrar plv-main-campus 64Mi 256Mi
+    set_local_memory statefulset couchdb-wallet-registrar plv-main-campus 64Mi 256Mi
+    set_local_memory statefulset couchdb-faculty plv-annex-campus 64Mi 256Mi
+    set_local_memory statefulset couchdb-wallet-faculty plv-annex-campus 64Mi 256Mi
+    set_local_memory statefulset couchdb-department plv-pubad-campus 64Mi 256Mi
+    set_local_memory statefulset couchdb-wallet-department plv-pubad-campus 64Mi 256Mi
+
+    set_local_memory statefulset ipfs-node plv-fabric 32Mi 256Mi
+    set_local_memory statefulset ipfs-annex plv-annex-campus 32Mi 256Mi
+    set_local_memory statefulset ipfs-pubad plv-pubad-campus 32Mi 256Mi
+    set_local_memory deployment ipfs-ha-router plv-fabric 16Mi 64Mi
+
+    set_local_memory deployment middleware-api plv-fabric 96Mi 192Mi
+    set_local_memory deployment auth-service plv-fabric 96Mi 256Mi
+    set_local_memory deployment fabric-identity-service plv-fabric 128Mi 384Mi
+    set_local_memory deployment ledger-service plv-fabric 128Mi 512Mi
+    set_local_memory deployment grade-upload-service plv-fabric 96Mi 512Mi
+    set_local_memory deployment settings-service plv-fabric 96Mi 192Mi
+    set_local_memory deployment redis-master plv-fabric 32Mi 128Mi
+    set_local_memory deployment dotnet-api-gateway plv-fabric 48Mi 160Mi
+    set_local_memory deployment dotnet-auth-service plv-fabric 96Mi 320Mi
+    set_local_memory deployment dotnet-academic-service plv-fabric 96Mi 320Mi
+    set_local_memory deployment dotnet-grade-service plv-fabric 128Mi 448Mi
+    set_local_memory deployment dotnet-operations-service plv-fabric 96Mi 320Mi
+    set_local_memory deployment dotnet-realtime-service plv-fabric 96Mi 320Mi
+    set_local_memory deployment frontend plv-fabric 32Mi 128Mi
+
+    set_local_memory deployment fabric-cli plv-main-campus 8Mi 64Mi
+    set_local_memory deployment registrar-chaincode plv-main-campus 16Mi 128Mi
+    set_local_memory deployment faculty-chaincode plv-annex-campus 16Mi 128Mi
+    set_local_memory deployment department-chaincode plv-pubad-campus 16Mi 128Mi
 }
 
 local_pv_root() {
@@ -608,8 +695,8 @@ EOF
     append_default "$clean_env" POSTGRES_DB "ActivityLogs"
     append_default "$clean_env" POSTGRES_REPL_USER "replica"
     append_default "$clean_env" POSTGRES_REPL_PASS "replica_pass_123"
-    append_default "$clean_env" COUCHDB_USER "capstone"
-    append_default "$clean_env" COUCHDB_PASS "pass123"
+    append_default "$clean_env" COUCHDB_USER "PLVADMIN"
+    append_default "$clean_env" COUCHDB_PASS "PLVSYSTEM2026"
 
     local package_ids
     local package_key
@@ -685,7 +772,18 @@ prepare_manifests() {
         sed -i 's/storage: 50Gi/storage: 10Gi/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/storage: 30Gi/storage: 10Gi/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/storage: 20Gi/storage: 10Gi/g' "$TMP_K8S_DIR"/*.yaml
+        preserve_existing_local_pvc_request "$TMP_K8S_DIR/06-orderer-1.yaml" orderer-1-pvc plv-main-campus
+        preserve_existing_local_pvc_request "$TMP_K8S_DIR/06-orderer-2.yaml" orderer-2-pvc plv-main-campus
+        preserve_existing_local_pvc_request "$TMP_K8S_DIR/06-orderer-3.yaml" orderer-3-pvc plv-annex-campus
+        preserve_existing_local_pvc_request "$TMP_K8S_DIR/07-peer-registrar.yaml" peer-registrar-pvc plv-main-campus
+        preserve_existing_local_pvc_request "$TMP_K8S_DIR/07-peer-faculty.yaml" peer-faculty-pvc plv-annex-campus
+        preserve_existing_local_pvc_request "$TMP_K8S_DIR/07-peer-department.yaml" peer-department-pvc plv-pubad-campus
+        # Fabric orderers, peers, and CCaaS containers idle well below 64 MiB
+        # locally. Lower their source requests before apply so a repeat deploy
+        # cannot conflict with the tighter limits added by the local budget.
+        sed -i '/requests:/,/limits:/ s/memory: "512Mi"/memory: "64Mi"/g' "$TMP_K8S_DIR"/*.yaml
         sed -i 's/replicas: [23]/replicas: 1/g' "$TMP_K8S_DIR/08-middleware-api.yaml"
+        sed -i 's/replicas: [23]/replicas: 1/g' "$TMP_K8S_DIR/14-client-app.yaml"
         sed -i 's/FABRIC_CA_INSECURE_TLS: "false"/FABRIC_CA_INSECURE_TLS: "true"/' "$TMP_K8S_DIR/08-middleware-api.yaml"
         sed -i '/- name: IPFS_RUN_AS_ROOT/{n;s/value: "false"/value: "true"/;}' "$TMP_K8S_DIR/09-ipfs.yaml"
     else
@@ -708,6 +806,33 @@ prepare_manifests() {
             return 1
         fi
     fi
+}
+
+preserve_existing_local_pvc_request() {
+    local manifest="$1"
+    local claim="$2"
+    local namespace="$3"
+    local existing_request=""
+
+    if ! existing_request="$(
+        kubectl get pvc "$claim" -n "$namespace" \
+            -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null
+    )"; then
+        return
+    fi
+
+    if [[ ! "$existing_request" =~ ^[0-9]+([.][0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K|m)?$ ]]; then
+        echo "ERROR: Existing PVC ${namespace}/${claim} has an invalid storage request: ${existing_request}"
+        return 1
+    fi
+
+    # PVC requests can grow but Kubernetes never permits them to shrink. The
+    # local profile reduces new claims to 10Gi, so retain the request recorded
+    # on an existing claim while leaving fresh local installations small.
+    sed -i \
+        "0,/^[[:space:]]*storage: 10Gi[[:space:]]*$/s//      storage: ${existing_request}/" \
+        "$manifest"
+    echo "Keeping existing PVC request ${namespace}/${claim} at ${existing_request}."
 }
 
 prepare_local_middleware_image() {
@@ -778,10 +903,10 @@ verify_required_application_fixes() {
         echo "ERROR: The Registrar finalized-grade correction endpoint is missing."
         return 1
     }
-    grep -q 'Commit Corrected Grade' ../frontend/src/components/registrar/RegistrarGradesView.jsx || {
-        echo "ERROR: The Registrar grade-correction frontend control is missing."
+    if grep -q 'Commit Corrected Grade' ../frontend/src/components/registrar/RegistrarGradesView.jsx; then
+        echo "ERROR: The Registrar grade-correction frontend control must remain disabled."
         return 1
-    }
+    fi
     grep -q 'Password Management' ../frontend/src/components/registrar/RegistrarGradesView.jsx || {
         echo "ERROR: The Registrar password-management frontend control is missing."
         return 1
@@ -823,6 +948,27 @@ verify_required_application_fixes() {
         echo "ERROR: The backend-only keepalive service is not registered."
         return 1
     }
+    grep -q 'DotnetServiceTopology.BuildGatewayConfiguration' ../client-app/Program.cs || {
+        echo "ERROR: The ASP.NET microservice gateway is not configured."
+        return 1
+    }
+    grep -q 'ServiceControllerFeatureProvider' ../client-app/Program.cs || {
+        echo "ERROR: ASP.NET bounded-context controller isolation is not configured."
+        return 1
+    }
+    local dotnet_deployment
+    for dotnet_deployment in \
+        dotnet-api-gateway \
+        dotnet-auth-service \
+        dotnet-academic-service \
+        dotnet-grade-service \
+        dotnet-operations-service \
+        dotnet-realtime-service; do
+        grep -q "name: ${dotnet_deployment}" ./k8s/14-client-app.yaml || {
+            echo "ERROR: Missing ASP.NET microservice deployment ${dotnet_deployment}."
+            return 1
+        }
+    done
     grep -q 'IntervalSeconds.*, 45' ../client-app/Services/BackendKeepAliveService.cs || {
         echo "ERROR: The 45-second backend keepalive interval is missing."
         return 1
@@ -845,6 +991,22 @@ verify_required_application_fixes() {
     }
     grep -q 'GF_USERS_DEFAULT_THEME' ../monitoring/observability-stack.yaml || {
         echo "ERROR: Grafana light-mode configuration is missing."
+        return 1
+    }
+    grep -q 'sessionStorage' ../frontend/src/services/authSession.js || {
+        echo "ERROR: Per-tab authentication storage is missing."
+        return 1
+    }
+    grep -q "department_admin: '/department-admin'" ../frontend/src/services/authSession.js || {
+        echo "ERROR: Stable role routes are missing from the frontend."
+        return 1
+    }
+    grep -q 'try_files.*index.html' ./k8s/12-frontend-ha.yaml || {
+        echo "ERROR: Kubernetes Nginx does not support direct role-route navigation."
+        return 1
+    }
+    grep -q 'path: /' ./k8s/15-main-ingress.yaml || {
+        echo "ERROR: The production ingress does not forward frontend role routes."
         return 1
     }
     grep -q 'chat_conversation_states' ../migrations/006_chat_conversation_states.sql || {
@@ -1010,22 +1172,41 @@ configure_local_application_rollouts() {
         ledger-service
         grade-upload-service
         settings-service
-        client-app
+        dotnet-api-gateway
+        dotnet-auth-service
+        dotnet-academic-service
+        dotnet-grade-service
+        dotnet-operations-service
+        dotnet-realtime-service
         frontend
         ipfs-ha-router
     )
 
     for deployment in "${deployments[@]}"; do
+        # On a clean install this function runs once before every application
+        # manifest has been created. Existing workloads still need the local
+        # Recreate strategy, while not-yet-created workloads can be skipped and
+        # will be configured by the second call after all manifests are applied.
+        if ! kubectl get deployment "$deployment" -n plv-fabric >/dev/null 2>&1; then
+            continue
+        fi
         kubectl patch deployment "$deployment" -n plv-fabric --type=merge \
             -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
     done
 
-    kubectl patch deployment registrar-chaincode -n plv-main-campus --type=merge \
-        -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
-    kubectl patch deployment faculty-chaincode -n plv-annex-campus --type=merge \
-        -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
-    kubectl patch deployment department-chaincode -n plv-pubad-campus --type=merge \
-        -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+    local entry
+    local namespace
+    for entry in \
+        "registrar-chaincode|plv-main-campus" \
+        "faculty-chaincode|plv-annex-campus" \
+        "department-chaincode|plv-pubad-campus"; do
+        IFS='|' read -r deployment namespace <<< "$entry"
+        if ! kubectl get deployment "$deployment" -n "$namespace" >/dev/null 2>&1; then
+            continue
+        fi
+        kubectl patch deployment "$deployment" -n "$namespace" --type=merge \
+            -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' >/dev/null
+    done
 }
 
 restart_deployment_and_wait() {
@@ -1192,6 +1373,7 @@ configure_peer_channel_endpoint_aliases() {
     prepare_manifests
 
     apply_manifest "$TMP_K8S_DIR/00-namespace.yaml"
+    remove_local_production_resource_policies
     apply_manifest "$TMP_K8S_DIR/01a-storage-class.yaml"
     if [[ "$PROFILE" == "local" ]]; then
         apply_manifest "$TMP_K8S_DIR/01b-persistent-volumes.local-kind.yaml"
@@ -1227,6 +1409,8 @@ configure_peer_channel_endpoint_aliases() {
     configure_peer_channel_endpoint_aliases
     apply_manifest "$TMP_K8S_DIR/08-middleware-api.yaml"
     apply_manifest "$TMP_K8S_DIR/09-ipfs.yaml"
+    configure_local_application_rollouts
+    configure_local_workload_resources
     wait_rollout statefulset/ipfs-node plv-fabric
     wait_rollout statefulset/ipfs-annex plv-annex-campus
     wait_rollout statefulset/ipfs-pubad plv-pubad-campus
@@ -1265,7 +1449,9 @@ configure_peer_channel_endpoint_aliases() {
         apply_manifest "$TMP_K8S_DIR/16-firewall-config.yaml"
     else
         kubectl delete horizontalpodautoscaler \
-            middleware-api-hpa auth-service-hpa ledger-service-hpa grade-upload-service-hpa client-app-hpa \
+            middleware-api-hpa auth-service-hpa ledger-service-hpa grade-upload-service-hpa \
+            dotnet-api-gateway-hpa dotnet-auth-service-hpa dotnet-academic-service-hpa \
+            dotnet-grade-service-hpa dotnet-operations-service-hpa dotnet-realtime-service-hpa client-app-hpa \
             -n plv-fabric --ignore-not-found
         echo "Skipping production-only autoscaling, ingress, backup, quota, and firewall manifests for local profile."
     fi
@@ -1274,6 +1460,7 @@ configure_peer_channel_endpoint_aliases() {
     configure_local_observability_resources
 
     configure_local_application_rollouts
+    configure_local_workload_resources
 
     echo "Restarting Fabric peers sequentially to reload refreshed crypto Secrets..."
     restart_deployment_and_wait peer-registrar plv-main-campus
@@ -1292,8 +1479,20 @@ configure_peer_channel_endpoint_aliases() {
     restart_deployment_and_wait grade-upload-service plv-fabric
     restart_deployment_and_wait settings-service plv-fabric
     restart_deployment_and_wait middleware-api plv-fabric
-    restart_deployment_and_wait client-app plv-fabric
+    restart_deployment_and_wait dotnet-auth-service plv-fabric
+    restart_deployment_and_wait dotnet-academic-service plv-fabric
+    restart_deployment_and_wait dotnet-grade-service plv-fabric
+    restart_deployment_and_wait dotnet-operations-service plv-fabric
+    restart_deployment_and_wait dotnet-realtime-service plv-fabric
+    restart_deployment_and_wait dotnet-api-gateway plv-fabric
     restart_deployment_and_wait frontend plv-fabric
+
+    # Upgrades from the former ASP.NET monolith are intentionally convergent:
+    # once every bounded-context service and the compatibility gateway are
+    # ready, remove resources that are no longer declared by the manifests.
+    kubectl delete deployment client-app -n plv-fabric --ignore-not-found >/dev/null
+    kubectl delete horizontalpodautoscaler client-app-hpa -n plv-fabric --ignore-not-found >/dev/null
+    kubectl delete poddisruptionbudget client-app-pdb -n plv-fabric --ignore-not-found >/dev/null
 
     echo "Fabric and application deployments restarted sequentially."
     echo "Manifests deployed."
@@ -1328,7 +1527,12 @@ wait_deployments() {
     wait_rollout deployment/grade-upload-service plv-fabric
     wait_rollout deployment/settings-service plv-fabric
     wait_rollout deployment/middleware-api plv-fabric
-    wait_rollout deployment/client-app plv-fabric
+    wait_rollout deployment/dotnet-auth-service plv-fabric
+    wait_rollout deployment/dotnet-academic-service plv-fabric
+    wait_rollout deployment/dotnet-grade-service plv-fabric
+    wait_rollout deployment/dotnet-operations-service plv-fabric
+    wait_rollout deployment/dotnet-realtime-service plv-fabric
+    wait_rollout deployment/dotnet-api-gateway plv-fabric
     wait_rollout deployment/frontend plv-fabric
     wait_rollout deployment/prometheus plv-fabric
     wait_rollout deployment/kube-state-metrics plv-fabric
@@ -1400,7 +1604,12 @@ verify_deployed_application_revision() {
         "ledger-service|plv-fabric|fabric-middleware" \
         "grade-upload-service|plv-fabric|fabric-middleware" \
         "settings-service|plv-fabric|fabric-middleware" \
-        "client-app|plv-fabric|client-app" \
+        "dotnet-api-gateway|plv-fabric|client-app" \
+        "dotnet-auth-service|plv-fabric|client-app" \
+        "dotnet-academic-service|plv-fabric|client-app" \
+        "dotnet-grade-service|plv-fabric|client-app" \
+        "dotnet-operations-service|plv-fabric|client-app" \
+        "dotnet-realtime-service|plv-fabric|client-app" \
         "frontend|plv-fabric|frontend" \
         "registrar-chaincode|plv-main-campus|registrar-chaincode" \
         "faculty-chaincode|plv-annex-campus|faculty-chaincode" \
@@ -1425,11 +1634,19 @@ verify_deployed_application_revision() {
          grep -R -q 'Permanently delete every message' /usr/share/nginx/html/static/js && \
          grep -R -q 'two-Registrar limit has been reached' /usr/share/nginx/html/static/js && \
          grep -R -q 'Delete Registrar' /usr/share/nginx/html/static/js && \
-         grep -R -q 'Network and Docker Issues' /usr/share/nginx/html/static/js && \
          grep -R -q 'kiosk&theme=light' /usr/share/nginx/html/static/js && \
+         grep -R -q 'blockgo.auth.token' /usr/share/nginx/html/static/js && \
+         grep -R -q '/department-admin' /usr/share/nginx/html/static/js && \
+         ! grep -R -q 'New Login Tab' /usr/share/nginx/html/static/js && \
          ! grep -R -q 'Service Health' /usr/share/nginx/html/static/js && \
          ! grep -R -q 'Platform Services' /usr/share/nginx/html/static/js" || {
         echo "ERROR: The deployed frontend bundle does not contain all required administration, support, chat, and Grafana changes."
+        return 1
+    }
+
+    kubectl exec "$frontend_pod" -n plv-fabric -- sh -ec \
+        "for route in login registrar department-admin faculty student system-admin; do wget -qO- http://127.0.0.1/\${route} | grep -q '<div id=\"root\"></div>'; done" || {
+        echo "ERROR: One or more frontend role deep links do not return the React application."
         return 1
     }
 
@@ -1459,7 +1676,7 @@ verify_deployed_application_revision() {
         fi
     done
 
-    echo "All custom deployments, migrations, CouchDB probes, frontend features, and Grafana settings match this source revision."
+    echo "All custom deployments, migrations, CouchDB probes, multi-session routes, frontend features, and Grafana settings match this source revision."
 }
 
 bootstrap_application_accounts() {
@@ -1539,36 +1756,124 @@ bootstrap_fabric() {
     bash ./k8s/install-chaincode.sh
 }
 
+uses_windows_host_networking() {
+    [[ -r /proc/sys/kernel/osrelease ]] && \
+        grep -qi microsoft /proc/sys/kernel/osrelease && \
+        command -v powershell.exe >/dev/null 2>&1 && \
+        command -v kubectl.exe >/dev/null 2>&1
+}
+
+local_http_ready() {
+    local url="$1"
+    local username="${2:-}"
+    local password="${3:-}"
+
+    if uses_windows_host_networking; then
+        if [[ -n "$username" || -n "$password" ]]; then
+            local auth_token
+            auth_token="$(printf '%s' "${username}:${password}" | base64 | tr -d '\r\n')"
+            powershell.exe -NoProfile -Command \
+                "try { \$result = Invoke-RestMethod -Uri '${url}' -Headers @{ Authorization = 'Basic ${auth_token}' } -TimeoutSec 2; if (\$result.status -eq 'ok') { exit 0 } } catch {}; exit 1" \
+                >/dev/null 2>&1
+        else
+            powershell.exe -NoProfile -Command \
+                "try { \$result = Invoke-WebRequest -UseBasicParsing -Uri '${url}' -TimeoutSec 2; if (\$result.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" \
+                >/dev/null 2>&1
+        fi
+        return
+    fi
+
+    if [[ -n "$username" || -n "$password" ]]; then
+        curl -fsS --max-time 2 --user "${username}:${password}" "$url" 2>/dev/null |
+            grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'
+    else
+        curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+    fi
+}
+
+start_local_port_forward_process() {
+    local namespace="$1"
+    local service="$2"
+    local port_mapping="$3"
+    local log_file="$4"
+
+    if uses_windows_host_networking; then
+        local windows_pid
+        windows_pid="$(
+            powershell.exe -NoProfile -Command \
+                "\$process = Start-Process -FilePath 'kubectl.exe' -ArgumentList @('port-forward','--address=127.0.0.1','-n','${namespace}','service/${service}','${port_mapping}') -WindowStyle Hidden -PassThru; [Console]::Write(\$process.Id); exit 0" |
+                tr -d '\r\n'
+        )"
+        if [[ ! "$windows_pid" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Windows kubectl port-forward process did not return a valid PID."
+            return 1
+        fi
+        LOCAL_PORT_FORWARD_PID="windows:${windows_pid}"
+        return
+    fi
+
+    nohup kubectl port-forward --address=127.0.0.1 -n "$namespace" \
+        "service/${service}" "$port_mapping" >"$log_file" 2>&1 </dev/null &
+    LOCAL_PORT_FORWARD_PID="$!"
+}
+
+local_port_forward_process_alive() {
+    local pid_reference="$1"
+    if [[ "$pid_reference" == windows:* ]]; then
+        local windows_pid="${pid_reference#windows:}"
+        powershell.exe -NoProfile -Command \
+            "if (Get-Process -Id ${windows_pid} -ErrorAction SilentlyContinue) { exit 0 }; exit 1" \
+            >/dev/null 2>&1
+        return
+    fi
+    [[ "$pid_reference" =~ ^[0-9]+$ ]] && kill -0 "$pid_reference" >/dev/null 2>&1
+}
+
+stop_local_port_forward_pid_file() {
+    local pid_file="$1"
+    local pid_reference=""
+    if [[ ! -f "$pid_file" ]]; then
+        return
+    fi
+
+    pid_reference="$(tr -d '[:space:]' < "$pid_file")"
+    if [[ "$pid_reference" == windows:* ]]; then
+        local windows_pid="${pid_reference#windows:}"
+        if [[ "$windows_pid" =~ ^[0-9]+$ ]] && command -v powershell.exe >/dev/null 2>&1; then
+            powershell.exe -NoProfile -Command \
+                "Stop-Process -Id ${windows_pid} -Force -ErrorAction SilentlyContinue" \
+                >/dev/null 2>&1 || true
+        fi
+    elif [[ "$pid_reference" =~ ^[0-9]+$ ]]; then
+        kill -9 "$pid_reference" >/dev/null 2>&1 || true
+    fi
+    rm -f "$pid_file"
+}
+
 start_local_frontend() {
     local pid_file=".local-frontend-port-forward.pid"
     local log_file=".local-frontend-port-forward.log"
-    local pid=""
+    local pid_reference=""
 
-    if curl -fsS --max-time 2 http://127.0.0.1:8080/nginx-health >/dev/null 2>&1; then
+    if local_http_ready http://127.0.0.1:8080/nginx-health; then
         echo "Local frontend is already available at http://localhost:8080"
         return
     fi
 
-    if [[ -f "$pid_file" ]]; then
-        pid="$(tr -d '[:space:]' < "$pid_file")"
-        if [[ "$pid" =~ ^[0-9]+$ ]]; then
-            kill -9 "$pid" >/dev/null 2>&1 || true
-        fi
-        rm -f "$pid_file"
-    fi
+    stop_local_port_forward_pid_file "$pid_file"
 
     rm -f "$log_file"
-    nohup kubectl port-forward -n plv-fabric service/frontend-service 8080:80 \
-        >"$log_file" 2>&1 </dev/null &
-    pid=$!
-    echo "$pid" > "$pid_file"
+    start_local_port_forward_process \
+        plv-fabric frontend-service 8080:80 "$log_file"
+    pid_reference="$LOCAL_PORT_FORWARD_PID"
+    echo "$pid_reference" > "$pid_file"
 
     for _ in $(seq 1 30); do
-        if curl -fsS --max-time 2 http://127.0.0.1:8080/nginx-health >/dev/null 2>&1; then
+        if local_http_ready http://127.0.0.1:8080/nginx-health; then
             echo "Local frontend is available at http://localhost:8080"
             return
         fi
-        if ! kill -0 "$pid" >/dev/null 2>&1; then
+        if ! local_port_forward_process_alive "$pid_reference"; then
             break
         fi
         sleep 1
@@ -1581,17 +1886,114 @@ start_local_frontend() {
     return 1
 }
 
+start_local_couchdb_port_forward() {
+    local name="$1"
+    local namespace="$2"
+    local service="$3"
+    local local_port="$4"
+    local remote_port="$5"
+    local database_role="$6"
+    local couchdb_user="$7"
+    local couchdb_pass="$8"
+    local pid_file=".local-${name}-port-forward.pid"
+    local log_file=".local-${name}-port-forward.log"
+    local pid_reference=""
+    local health_url="http://127.0.0.1:${local_port}/_up"
+
+    if local_http_ready "$health_url" "$couchdb_user" "$couchdb_pass"; then
+        echo "Local CouchDB ${database_role} ${name} is already available at http://localhost:${local_port}/_utils/"
+        return
+    fi
+
+    stop_local_port_forward_pid_file "$pid_file"
+
+    # Remove an orphaned project-owned tunnel without touching an unrelated
+    # process that may happen to use the requested local port.
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -9 -f "[k]ubectl(.exe)?[[:space:]].*port-forward.*${service}.*${local_port}:${remote_port}" \
+            >/dev/null 2>&1 || true
+    fi
+
+    rm -f "$log_file" "${log_file%.log}.error.log"
+    start_local_port_forward_process \
+        "$namespace" "$service" "${local_port}:${remote_port}" "$log_file"
+    pid_reference="$LOCAL_PORT_FORWARD_PID"
+    echo "$pid_reference" > "$pid_file"
+
+    for _ in $(seq 1 30); do
+        if local_http_ready "$health_url" "$couchdb_user" "$couchdb_pass"; then
+            echo "Local CouchDB ${database_role} ${name} is available at http://localhost:${local_port}/_utils/"
+            return
+        fi
+        if ! local_port_forward_process_alive "$pid_reference"; then
+            break
+        fi
+        sleep 1
+    done
+
+    echo "ERROR: CouchDB ${database_role} port-forward ${name} did not become ready on localhost:${local_port}."
+    if [[ -f "$log_file" ]]; then
+        tail -n 20 "$log_file"
+    fi
+    return 1
+}
+
+start_local_couchdb_port_forwards() {
+    local couchdb_user=""
+    local couchdb_pass=""
+    local entry=""
+    local name=""
+    local namespace=""
+    local service=""
+    local local_port=""
+    local remote_port=""
+    local database_role=""
+
+    couchdb_user="$(
+        kubectl get secret blockgo-secrets -n plv-fabric \
+            -o jsonpath='{.data.COUCHDB_USER}' | base64 --decode
+    )"
+    couchdb_pass="$(
+        kubectl get secret blockgo-secrets -n plv-fabric \
+            -o jsonpath='{.data.COUCHDB_PASS}' | base64 --decode
+    )"
+
+    if [[ -z "$couchdb_user" || -z "$couchdb_pass" ]]; then
+        echo "ERROR: CouchDB credentials could not be loaded from plv-fabric/blockgo-secrets."
+        return 1
+    fi
+
+    echo "Starting authenticated localhost-only CouchDB port-forwards..."
+    for entry in \
+        "couchdb-registrar|plv-main-campus|couchdb-registrar|5986|5984|ledger" \
+        "couchdb-wallet-registrar|plv-main-campus|couchdb-wallet-registrar|5990|5985|wallet" \
+        "couchdb-wallet-faculty|plv-annex-campus|couchdb-wallet-faculty|6990|5985|wallet" \
+        "couchdb-wallet-department|plv-pubad-campus|couchdb-wallet-department|7990|5985|wallet"; do
+        IFS='|' read -r name namespace service local_port remote_port database_role <<< "$entry"
+        start_local_couchdb_port_forward \
+            "$name" "$namespace" "$service" "$local_port" "$remote_port" \
+            "$database_role" \
+            "$couchdb_user" "$couchdb_pass"
+    done
+
+    unset couchdb_user couchdb_pass
+}
+
 stop_local_helpers() {
     echo "Stopping project-local helper processes and Docker Compose services..."
 
-    if [[ -f .local-frontend-port-forward.pid ]]; then
-        local frontend_forward_pid
-        frontend_forward_pid="$(tr -d '[:space:]' < .local-frontend-port-forward.pid)"
-        if [[ "$frontend_forward_pid" =~ ^[0-9]+$ ]]; then
-            kill -9 "$frontend_forward_pid" >/dev/null 2>&1 || true
+    local port_forward_pid_file=""
+    for port_forward_pid_file in \
+        .local-frontend-port-forward.pid \
+        .local-couchdb-registrar-port-forward.pid \
+        .local-couchdb-wallet-registrar-port-forward.pid \
+        .local-couchdb-wallet-faculty-port-forward.pid \
+        .local-couchdb-wallet-department-port-forward.pid; do
+        if [[ ! -f "$port_forward_pid_file" ]]; then
+            continue
         fi
-        rm -f .local-frontend-port-forward.pid
-    fi
+        stop_local_port_forward_pid_file "$port_forward_pid_file"
+    done
 
     if [[ -f .watchdog.pid ]]; then
         local watchdog_pid
@@ -1605,7 +2007,7 @@ stop_local_helpers() {
 
     if command -v pkill >/dev/null 2>&1; then
         pkill -9 -f '[n]ginx_failover_watchdog.sh' 2>/dev/null || true
-        pkill -9 -f '[k]ubectl(.exe)?[[:space:]].*port-forward.*(middleware-api|client-app|frontend|ipfs)' 2>/dev/null || true
+        pkill -9 -f '[k]ubectl(.exe)?[[:space:]].*port-forward.*(middleware-api|client-app|frontend|ipfs|couchdb)' 2>/dev/null || true
     fi
 
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -1797,6 +2199,7 @@ main() {
             bootstrap_application_accounts
             if [[ "$PROFILE" == "local" ]]; then
                 start_local_frontend
+                start_local_couchdb_port_forwards
             fi
             bootstrap_fabric
             echo "Deployment complete."
@@ -1814,4 +2217,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

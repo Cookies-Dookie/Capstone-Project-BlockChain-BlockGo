@@ -129,16 +129,27 @@ spec:
         - name: artifacts
           mountPath: /var/hyperledger/orderer/registrar-channel.block
           subPath: registrar-channel.block
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: operations
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 60
         livenessProbe:
-          tcpSocket:
-            port: 7050
+          httpGet:
+            path: /healthz
+            port: operations
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 3
         readinessProbe:
-          tcpSocket:
-            port: 7050
+          httpGet:
+            path: /healthz
+            port: operations
           initialDelaySeconds: 10
           periodSeconds: 5
+          timeoutSeconds: 3
       volumes:
       - name: orderer-storage
         persistentVolumeClaim:

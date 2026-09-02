@@ -93,20 +93,31 @@ groups:
           summary: "Frontend deployment has no available replicas"
           description: "The React/Nginx frontend is unavailable. Check frontend pod readiness, /nginx-health, and ingress events."
 
-      - alert: ClientAppDeploymentUnavailable
+      - alert: DotnetGatewayDeploymentUnavailable
         expr: |
-          kube_deployment_status_replicas_available{namespace="plv-fabric",deployment="client-app"} < 1
+          kube_deployment_status_replicas_available{namespace="plv-fabric",deployment="dotnet-api-gateway"} < 1
         for: 2m
         labels:
           severity: critical
-          component: client-app
+          component: dotnet-api-gateway
         annotations:
-          summary: "C# backend deployment has no available replicas"
-          description: "The client-app backend is unavailable. Check /api/backend/health, pod logs, database connectivity, and readiness events."
+          summary: "ASP.NET API gateway has no available replicas"
+          description: "The .NET gateway is unavailable. Check /api/backend/health, its aggregate /api/ready response, pod logs, and service endpoints."
+
+      - alert: DotnetInternalServiceUnavailable
+        expr: |
+          kube_deployment_status_replicas_available{namespace="plv-fabric",deployment=~"dotnet-(auth|academic|grade|operations|realtime)-service"} < 1
+        for: 2m
+        labels:
+          severity: critical
+          component: dotnet-microservices
+        annotations:
+          summary: "ASP.NET service {{ $labels.deployment }} has no available replicas"
+          description: "An internal .NET bounded-context service is unavailable. Check its /health endpoint and downstream dependencies."
 
       - alert: PlatformPodRestarting
         expr: |
-          increase(kube_pod_container_status_restarts_total{namespace="plv-fabric",pod=~"(frontend|client-app).*",container=~"frontend-nginx|client-app"}[15m]) > 1
+          increase(kube_pod_container_status_restarts_total{namespace="plv-fabric",pod=~"(frontend|dotnet-).*",container=~"frontend-nginx|dotnet-.*"}[15m]) > 1
         for: 5m
         labels:
           severity: warning
@@ -127,17 +138,17 @@ groups:
           summary: "Frontend pod {{ $labels.pod }} memory usage is above 85%"
           description: "The frontend Nginx container is close to its memory limit. Check traffic, static asset serving, and pod events."
 
-      - alert: ClientAppMemoryUsageHigh
+      - alert: DotnetServiceMemoryUsageHigh
         expr: |
-          container_memory_working_set_bytes{namespace="plv-fabric",pod=~"client-app.*",container="client-app"}
-          / container_spec_memory_limit_bytes{namespace="plv-fabric",pod=~"client-app.*",container="client-app"} > 0.85
+          container_memory_working_set_bytes{namespace="plv-fabric",pod=~"dotnet-.*",container=~"dotnet-.*"}
+          / container_spec_memory_limit_bytes{namespace="plv-fabric",pod=~"dotnet-.*",container=~"dotnet-.*"} > 0.85
         for: 5m
         labels:
           severity: warning
-          component: client-app
+          component: dotnet-microservices
         annotations:
-          summary: "C# backend pod {{ $labels.pod }} memory usage is above 85%"
-          description: "The client-app container is close to its memory limit. Check request volume, logs, and database/IPFS operations."
+          summary: "ASP.NET pod {{ $labels.pod }} memory usage is above 85%"
+          description: "A .NET microservice is close to its memory limit. Check its bounded-context request volume, logs, and downstream dependencies."
 
   - name: blockgo-observability
     interval: 30s

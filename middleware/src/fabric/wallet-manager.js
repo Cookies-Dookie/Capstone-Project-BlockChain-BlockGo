@@ -21,8 +21,8 @@ function fabricWallets() {
 
 function walletLocation(role) {
     const normalized = normalizeAuthRole(role);
-    const user = process.env.COUCHDB_USER || 'capstone';
-    const pass = process.env.COUCHDB_PASS || 'pass123';
+    const user = process.env.COUCHDB_USER || 'PLVADMIN';
+    const pass = process.env.COUCHDB_PASS || 'PLVSYSTEM2026';
     const host = isContainerized() ? 'host.docker.internal' : '127.0.0.1';
     const withCredentials = (configured, fallbackPort) => {
         const url = new URL(configured || `http://${host}:${fallbackPort}`);

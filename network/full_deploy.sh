@@ -124,8 +124,8 @@ spawn_couchdb_wallet() {
     docker rm -f -v couchdb_wallet 2>/dev/null || true
     docker run -d --name couchdb_wallet \
         --network registrar-net \
-        -e COUCHDB_USER="${COUCHDB_USER:-capstone}" \
-        -e COUCHDB_PASSWORD="${COUCHDB_PASS:-pass123}" \
+        -e COUCHDB_USER="${COUCHDB_USER:-PLVADMIN}" \
+        -e COUCHDB_PASSWORD="${COUCHDB_PASS:-PLVSYSTEM2026}" \
         -p 5990:5984 \
         couchdb:3.2.2
 }

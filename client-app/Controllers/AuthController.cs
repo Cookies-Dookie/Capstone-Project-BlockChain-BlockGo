@@ -462,7 +462,7 @@ namespace Client_app.Controllers
                 if (request.Role?.ToLower() == "student" && !string.IsNullOrEmpty(request.DateOfBirth))
                 {
                     string[] formats = { "MM/dd/yyyy", "M/d/yyyy", "MM/d/yyyy", "M/dd/yyyy", "yyyy-MM-dd" };
-                    if (DateTime.TryParseExact(request.DateOfBirth, formats, null, System.Globalization.DateTimeStyles.None, out DateTime dob))
+                    if (DateTime.TryParseExact(request.DateOfBirth, formats, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime dob))
                     {
                         parsedDob = dob;
                         request.DateOfBirth = dob.ToString("MM/dd/yyyy");
@@ -823,6 +823,44 @@ namespace Client_app.Controllers
             {
                 return StatusCode(500, new { status = "Error", message = ex.Message });
             }
+        }
+
+        [HttpGet("students/next-id")]
+        [Authorize(Roles = "registrar")]
+        public async Task<IActionResult> GetNextStudentId([FromQuery] string year)
+        {
+            var normalizedYear = year?.Trim() ?? string.Empty;
+            if (!System.Text.RegularExpressions.Regex.IsMatch(normalizedYear, @"^\d{4}$"))
+                return BadRequest(new { status = "Error", message = "Year must be a four-digit value." });
+
+            var prefix = normalizedYear.Substring(2, 2);
+            var pattern = new System.Text.RegularExpressions.Regex(
+                $@"^{System.Text.RegularExpressions.Regex.Escape(prefix)}-(\d{{4}})$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            var highestSequence = 0;
+
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+            await using var command = new NpgsqlCommand(
+                "SELECT student_no FROM studentprofiles WHERE student_no LIKE @prefix", conn);
+            command.Parameters.AddWithValue("prefix", $"{prefix}-%");
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                if (reader.IsDBNull(0)) continue;
+                var match = pattern.Match(reader.GetString(0).Trim());
+                if (match.Success && int.TryParse(match.Groups[1].Value, out var sequence))
+                    highestSequence = Math.Max(highestSequence, sequence);
+            }
+
+            return Ok(new
+            {
+                status = "Success",
+                year = normalizedYear,
+                prefix,
+                highestSequence,
+                nextStudentId = highestSequence < 9999 ? $"{prefix}-{highestSequence + 1:0000}" : null
+            });
         }
 
         [HttpPut("students/{id}/assign")]
@@ -1790,6 +1828,7 @@ namespace Client_app.Controllers
                         int existingUserId = 0;
                         string existingRole = "";
                         bool existingStudentProfile = false;
+                        string existingStudentNo = "";
 
                         using var checkCmd = new NpgsqlCommand(@"
                             SELECT
@@ -1800,7 +1839,8 @@ namespace Client_app.Controllers
                                     SELECT 1
                                     FROM StudentProfiles sp
                                     WHERE sp.user_id = u.id
-                                ) AS has_profile
+                                ) AS has_profile,
+                                COALESCE(existing_profile.student_no, '')
                             FROM Users u
                             LEFT JOIN StudentProfiles existing_profile ON existing_profile.user_id = u.id
                             WHERE LOWER(u.email) = LOWER(@email)
@@ -1817,12 +1857,16 @@ namespace Client_app.Controllers
                                 existingRole = existingReader.GetString(1);
                                 _ = existingReader.GetString(2);
                                 existingStudentProfile = !existingReader.IsDBNull(3) && existingReader.GetBoolean(3);
+                                existingStudentNo = existingReader.IsDBNull(4) ? "" : existingReader.GetString(4).Trim();
                             }
                         }
                         bool exists = existingUserId > 0;
 
                         if (exists && !string.Equals(existingRole, "student", StringComparison.OrdinalIgnoreCase))
                             throw new Exception("That identifier belongs to a non-student account.");
+                        if (exists && existingStudentProfile && !string.IsNullOrWhiteSpace(existingStudentNo) &&
+                            !string.Equals(existingStudentNo, studentNo.Trim(), StringComparison.OrdinalIgnoreCase))
+                            throw new Exception("Student ID cannot be changed after the student has been enrolled.");
                         if (!exists && normalizedMode == "update")
                             throw new Exception("Student does not exist yet. Use Bulk Enroll first.");
                         if (!exists && string.IsNullOrWhiteSpace(name))
@@ -1833,7 +1877,7 @@ namespace Client_app.Controllers
                         {
                             if (DateTime.TryParseExact(dobStr, "MM/dd/yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime parsedDob))
                                 dobDate = parsedDob;
-                            else if (DateTime.TryParse(dobStr, out DateTime fallbackDob))
+                            else if (DateTime.TryParse(dobStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime fallbackDob))
                                 dobDate = fallbackDob;
                         }
                         if (!exists && !dobDate.HasValue)
@@ -1875,7 +1919,10 @@ namespace Client_app.Controllers
                                     using var updateProfile = new NpgsqlCommand(@"
                                         UPDATE StudentProfiles 
                                         SET full_name = COALESCE(@name, full_name),
-                                            student_no = COALESCE(@studentno, student_no),
+                                            student_no = CASE
+                                                WHEN NULLIF(BTRIM(student_no), '') IS NULL THEN @studentno
+                                                ELSE student_no
+                                            END,
                                             department = COALESCE(@dept, department),
                                             section = COALESCE(@sec, section),
                                             date_of_birth = COALESCE(@dob, date_of_birth),

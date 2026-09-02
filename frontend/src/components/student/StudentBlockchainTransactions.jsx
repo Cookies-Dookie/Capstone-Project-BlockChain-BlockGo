@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { fetchStudentBlockchainTransactions } from '../../services/api';
 import { getGradeEquivalent } from '../../utils/gradingHelpers';
 
+const TRANSACTIONS_PER_PAGE = 10;
+
 const shortenHash = (value = '') => value.length > 18 ? `${value.slice(0, 9)}…${value.slice(-9)}` : value;
 const displayEquivalent = (grade) => {
   const numericGrade = Number(grade);
@@ -30,12 +32,14 @@ const StudentBlockchainTransactions = () => {
   const [error, setError] = useState('');
   const [expandedHash, setExpandedHash] = useState('');
   const [copiedHash, setCopiedHash] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
       const response = await fetchStudentBlockchainTransactions();
       setTransactions(Array.isArray(response?.data) ? response.data : []);
+      setCurrentPage(1);
     } catch (err) { setError(err.message || 'Unable to retrieve blockchain transactions.'); }
     finally { setLoading(false); }
   }, []);
@@ -47,6 +51,12 @@ const StudentBlockchainTransactions = () => {
     setCopiedHash(hash);
     window.setTimeout(() => setCopiedHash(''), 1500);
   };
+
+  const totalPages = Math.max(1, Math.ceil(transactions.length / TRANSACTIONS_PER_PAGE));
+  const pageStartIndex = (currentPage - 1) * TRANSACTIONS_PER_PAGE;
+  const paginatedTransactions = transactions.slice(pageStartIndex, pageStartIndex + TRANSACTIONS_PER_PAGE);
+  const firstVisibleTransaction = transactions.length === 0 ? 0 : pageStartIndex + 1;
+  const lastVisibleTransaction = Math.min(pageStartIndex + TRANSACTIONS_PER_PAGE, transactions.length);
 
   if (loading) return <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-500">Loading your private blockchain transaction history…</div>;
 
@@ -63,7 +73,7 @@ const StudentBlockchainTransactions = () => {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">Student ID</th><th className="px-4 py-3">Subject</th><th className="px-4 py-3">Professor</th><th className="px-4 py-3">Academic Period</th><th className="px-4 py-3">Term</th><th className="px-4 py-3">Grade</th><th className="px-4 py-3">Equivalent</th><th className="px-4 py-3">Hash / Transaction ID</th><th className="px-4 py-3">Status</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
-              {transactions.map((transaction, index) => {
+              {paginatedTransactions.map((transaction, index) => {
                 const hash = transaction.transactionHash || transaction.transactionId || '';
                 return (
                   <tr key={`${transaction.transactionId}-${index}`} className="align-top hover:bg-slate-50">
@@ -79,6 +89,29 @@ const StudentBlockchainTransactions = () => {
               })}
             </tbody>
           </table>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-sm font-medium text-slate-600">
+              Showing <span className="font-bold text-[#003366]">{firstVisibleTransaction}-{lastVisibleTransaction}</span> of {transactions.length} · Page {currentPage} of {totalPages}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={currentPage === 1}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-[#003366] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                disabled={currentPage === totalPages}
+                className="rounded-lg bg-[#003366] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#00264d] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
       <p className="mt-4 text-xs text-slate-500">In this system the Fabric transaction ID is the hash-derived transaction identifier shown as the transaction hash.</p>
