@@ -6,6 +6,7 @@
 #   ./k8s/deploy-k8s.sh production apply
 #   ./k8s/deploy-k8s.sh local verify
 #   ./k8s/deploy-k8s.sh production status
+#   ./k8s/deploy-k8s.sh production gke-setup
 #   ./k8s/deploy-k8s.sh local delete
 
 set -euo pipefail
@@ -25,9 +26,9 @@ if [[ "${1:-}" == "local" || "${1:-}" == "production" ]]; then
     ACTION="${2:-apply}"
 elif [[ "${2:-}" == "local" || "${2:-}" == "production" ]]; then
     PROFILE="$2"
-elif [[ "${1:-}" == "apply" || "${1:-}" == "delete" || "${1:-}" == "status" || "${1:-}" == "verify" ]]; then
+elif [[ "${1:-}" == "apply" || "${1:-}" == "delete" || "${1:-}" == "status" || "${1:-}" == "verify" || "${1:-}" == "gke-setup" ]]; then
     ACTION="$1"
-elif [[ "${2:-}" == "apply" || "${2:-}" == "delete" || "${2:-}" == "status" || "${2:-}" == "verify" ]]; then
+elif [[ "${2:-}" == "apply" || "${2:-}" == "delete" || "${2:-}" == "status" || "${2:-}" == "verify" || "${2:-}" == "gke-setup" ]]; then
     ACTION="$2"
 fi
 
@@ -40,9 +41,9 @@ case "$PROFILE" in
 esac
 
 case "$ACTION" in
-    apply|delete|status|verify) ;;
+    apply|delete|status|verify|gke-setup) ;;
     *)
-        echo "Usage: $0 [local|production] [apply|delete|status|verify]"
+        echo "Usage: $0 [local|production] [apply|delete|status|verify|gke-setup]"
         exit 1
         ;;
 esac
@@ -785,8 +786,12 @@ prepare_manifests() {
         sed -i 's/replicas: [23]/replicas: 1/g' "$TMP_K8S_DIR/08-middleware-api.yaml"
         sed -i 's/replicas: [23]/replicas: 1/g' "$TMP_K8S_DIR/14-client-app.yaml"
         sed -i 's/FABRIC_CA_INSECURE_TLS: "false"/FABRIC_CA_INSECURE_TLS: "true"/' "$TMP_K8S_DIR/08-middleware-api.yaml"
+        sed -i 's/FABRIC_DISCOVERY_ENABLED: "true"/FABRIC_DISCOVERY_ENABLED: "false"/' "$TMP_K8S_DIR/08-middleware-api.yaml"
+        sed -i 's/FABRIC_HA_ENABLED: "true"/FABRIC_HA_ENABLED: "false"/' "$TMP_K8S_DIR/08-middleware-api.yaml"
         sed -i '/- name: IPFS_RUN_AS_ROOT/{n;s/value: "false"/value: "true"/;}' "$TMP_K8S_DIR/09-ipfs.yaml"
+        sed -i '/^[[:space:]]*nodeSelector:[[:space:]]*$/,+1d' "$TMP_K8S_DIR"/*.yaml
     else
+        resolve_gke_zones
         echo "Preparing production manifests with the source-built image revision ${PRODUCTION_IMAGE_TAG}."
         local image_name
         for image_name in \
@@ -805,7 +810,156 @@ prepare_manifests() {
             echo "ERROR: Placeholder production image references remain after manifest preparation."
             return 1
         fi
+
+        sed -i "s/__GKE_ZONE_A__/${GKE_ZONE_A}/g; s/__GKE_ZONE_B__/${GKE_ZONE_B}/g; s/__GKE_ZONE_C__/${GKE_ZONE_C}/g" "$TMP_K8S_DIR"/*.yaml
+        if grep -R -q '__GKE_ZONE_[ABC]__' "$TMP_K8S_DIR"; then
+            echo "ERROR: One or more GKE zone placeholders were not resolved."
+            return 1
+        fi
     fi
+}
+
+resolve_gke_zones() {
+    if [[ -n "${GKE_REGION:-}" ]]; then
+        GKE_ZONE_A="${GKE_ZONE_A:-${GKE_REGION}-a}"
+        GKE_ZONE_B="${GKE_ZONE_B:-${GKE_REGION}-b}"
+        GKE_ZONE_C="${GKE_ZONE_C:-${GKE_REGION}-c}"
+    fi
+
+    if [[ -z "${GKE_ZONE_A:-}" || -z "${GKE_ZONE_B:-}" || -z "${GKE_ZONE_C:-}" ]]; then
+        local discovered_zones=()
+        mapfile -t discovered_zones < <(
+            kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.labels.topology\.kubernetes\.io/zone}{"\n"}{end}' 2>/dev/null |
+                awk 'NF' | sort -u
+        )
+        if (( ${#discovered_zones[@]} < 3 )); then
+            echo "ERROR: Production requires three GKE zones. Set GKE_REGION or GKE_ZONE_A/B/C."
+            return 1
+        fi
+        GKE_ZONE_A="${GKE_ZONE_A:-${discovered_zones[0]}}"
+        GKE_ZONE_B="${GKE_ZONE_B:-${discovered_zones[1]}}"
+        GKE_ZONE_C="${GKE_ZONE_C:-${discovered_zones[2]}}"
+    fi
+
+    if [[ "$GKE_ZONE_A" == "$GKE_ZONE_B" || "$GKE_ZONE_A" == "$GKE_ZONE_C" || "$GKE_ZONE_B" == "$GKE_ZONE_C" ]]; then
+        echo "ERROR: GKE_ZONE_A, GKE_ZONE_B, and GKE_ZONE_C must be distinct."
+        return 1
+    fi
+    export GKE_ZONE_A GKE_ZONE_B GKE_ZONE_C
+    echo "GKE zones: $GKE_ZONE_A, $GKE_ZONE_B, $GKE_ZONE_C"
+}
+
+validate_production_zone_nodes() {
+    if [[ "$PROFILE" != "production" ]]; then
+        return
+    fi
+    resolve_gke_zones
+    local zone
+    for zone in "$GKE_ZONE_A" "$GKE_ZONE_B" "$GKE_ZONE_C"; do
+        if ! kubectl get nodes -l "topology.kubernetes.io/zone=${zone}" -o name | grep -q .; then
+            echo "ERROR: No GKE node is available in required zone $zone."
+            return 1
+        fi
+    done
+}
+
+generate_production_fabric_artifacts() {
+    if [[ "$PROFILE" != "production" ]]; then
+        return
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+        echo "ERROR: Docker is required to generate the six-consenter Fabric blocks."
+        return 1
+    fi
+
+    mkdir -p ./channel-artifacts-k8s
+    local workspace_path
+    workspace_path="$(pwd)"
+    echo "Generating fresh six-orderer production channel artifacts..."
+    docker run --rm \
+        -v "${workspace_path}/config/configtx-k8s.yaml:/fabric-config/configtx.yaml:ro" \
+        -v "${workspace_path}/crypto-config-final-v2:/crypto-config-final-v2:ro" \
+        -v "${workspace_path}/crypto-config-final-v2:/etc/hyperledger/fabric/crypto-config-final-v2:ro" \
+        -v "${workspace_path}/channel-artifacts-k8s:/artifacts" \
+        -e FABRIC_CFG_PATH=/fabric-config \
+        hyperledger/fabric-tools:2.5.4 \
+        configtxgen -profile UniversityGenesis -channelID system-channel -outputBlock /artifacts/orderer.genesis.block
+    docker run --rm \
+        -v "${workspace_path}/config/configtx-k8s.yaml:/fabric-config/configtx.yaml:ro" \
+        -v "${workspace_path}/crypto-config-final-v2:/crypto-config-final-v2:ro" \
+        -v "${workspace_path}/crypto-config-final-v2:/etc/hyperledger/fabric/crypto-config-final-v2:ro" \
+        -v "${workspace_path}/channel-artifacts-k8s:/artifacts" \
+        -e FABRIC_CFG_PATH=/fabric-config \
+        hyperledger/fabric-tools:2.5.4 \
+        configtxgen -profile RegistrarChannel -channelID registrar-channel -outputBlock /artifacts/registrar-channel.block
+}
+
+setup_gke_cluster() {
+    if [[ "$PROFILE" != "production" ]]; then
+        echo "ERROR: gke-setup is available only for the production profile."
+        return 1
+    fi
+    for variable in GCP_PROJECT_ID GKE_CLUSTER_NAME GKE_REGION; do
+        if [[ -z "${!variable:-}" ]]; then
+            echo "ERROR: $variable is required for gke-setup."
+            return 1
+        fi
+    done
+    if ! command -v gcloud >/dev/null 2>&1; then
+        echo "ERROR: gcloud is required for gke-setup."
+        return 1
+    fi
+
+    GKE_ZONE_A="${GKE_ZONE_A:-${GKE_REGION}-a}"
+    GKE_ZONE_B="${GKE_ZONE_B:-${GKE_REGION}-b}"
+    GKE_ZONE_C="${GKE_ZONE_C:-${GKE_REGION}-c}"
+    resolve_gke_zones
+    local node_locations="${GKE_ZONE_A},${GKE_ZONE_B},${GKE_ZONE_C}"
+    local node_service_account_args=()
+    if [[ -n "${GKE_NODE_SERVICE_ACCOUNT:-}" ]]; then
+        node_service_account_args+=(--service-account "$GKE_NODE_SERVICE_ACCOUNT")
+    fi
+
+    if ! gcloud container clusters describe "$GKE_CLUSTER_NAME" --project "$GCP_PROJECT_ID" --region "$GKE_REGION" >/dev/null 2>&1; then
+        echo "Creating regional GKE cluster $GKE_CLUSTER_NAME across $node_locations..."
+        gcloud container clusters create "$GKE_CLUSTER_NAME" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GKE_REGION" \
+            --node-locations "$node_locations" \
+            --num-nodes "${GKE_NODES_PER_ZONE:-1}" \
+            --machine-type "${GKE_MACHINE_TYPE:-e2-standard-4}" \
+            --disk-type pd-balanced \
+            --disk-size "${GKE_NODE_DISK_GB:-100}" \
+            --release-channel regular \
+            --enable-ip-alias \
+            --enable-shielded-nodes \
+            --enable-dataplane-v2 \
+            --addons GcePersistentDiskCsiDriver,HttpLoadBalancing \
+            "${node_service_account_args[@]}"
+    else
+        echo "Using existing regional GKE cluster $GKE_CLUSTER_NAME."
+        gcloud container clusters update "$GKE_CLUSTER_NAME" \
+            --project "$GCP_PROJECT_ID" --region "$GKE_REGION" \
+            --update-addons GcePersistentDiskCsiDriver=ENABLED
+    fi
+
+    gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --project "$GCP_PROJECT_ID" --region "$GKE_REGION"
+    check_cluster
+    resolve_gke_zones
+    local cluster_location_type
+    cluster_location_type="$(gcloud container clusters describe "$GKE_CLUSTER_NAME" --project "$GCP_PROJECT_ID" --region "$GKE_REGION" --format='value(locationType)')"
+    if [[ "$cluster_location_type" != "REGIONAL" ]]; then
+        echo "ERROR: $GKE_CLUSTER_NAME is not a regional GKE cluster."
+        return 1
+    fi
+    local zone
+    for zone in "$GKE_ZONE_A" "$GKE_ZONE_B" "$GKE_ZONE_C"; do
+        if ! kubectl get nodes -l "topology.kubernetes.io/zone=${zone}" -o name | grep -q .; then
+            echo "ERROR: The cluster has no schedulable node in required zone $zone."
+            return 1
+        fi
+    done
+    echo "GKE cluster is ready. Run: $0 production apply"
 }
 
 preserve_existing_local_pvc_request() {
@@ -1132,6 +1286,12 @@ verify_deployment_inputs() {
 
     local required_file
     for required_file in \
+        ./config/configtx-k8s.yaml \
+        ./k8s/04d-postgres-additional-replicas.yaml \
+        ./k8s/06-orderer-4.yaml \
+        ./k8s/06-orderer-5.yaml \
+        ./k8s/06-orderer-6.yaml \
+        ./k8s/07-peer-secondary.yaml \
         ../migrations/006_chat_conversation_states.sql \
         ../migrations/007_group_chats.sql \
         ../migrations/008_support_ticket_specialist_assignments.sql \
@@ -1233,6 +1393,26 @@ deploy_orderers_sequentially() {
         "$TMP_K8S_DIR/06-orderer-2.yaml|orderer-2|plv-main-campus"
         "$TMP_K8S_DIR/06-orderer-3.yaml|orderer-3|plv-annex-campus"
     )
+    if [[ "$PROFILE" == "production" ]]; then
+        orderers+=(
+            "$TMP_K8S_DIR/06-orderer-4.yaml|orderer-4|plv-annex-campus"
+            "$TMP_K8S_DIR/06-orderer-5.yaml|orderer-5|plv-pubad-campus"
+            "$TMP_K8S_DIR/06-orderer-6.yaml|orderer-6|plv-pubad-campus"
+        )
+    fi
+
+    if [[ "$PROFILE" == "production" ]]; then
+        local consenter_count
+        consenter_count="$(grep -c '^[[:space:]]*- Host: orderer-' ./config/configtx-k8s.yaml)"
+        if [[ "$consenter_count" != "6" ]]; then
+            echo "ERROR: Production configtx must declare six Raft consenters; found $consenter_count."
+            return 1
+        fi
+        if ! grep -q 'replication-type: regional-pd' ./k8s/01a-storage-class.yaml; then
+            echo "ERROR: Production storage must use GKE regional persistent disks."
+            return 1
+        fi
+    fi
     local -A deployed=()
     local entry
     local manifest
@@ -1278,6 +1458,9 @@ deploy_orderers_sequentially() {
 }
 
 configure_orderer_channel_endpoint_aliases() {
+    if [[ "$PROFILE" == "production" ]]; then
+        return
+    fi
     local orderer_one_ip
     local orderer_two_ip
     local orderer_three_ip
@@ -1309,6 +1492,9 @@ configure_orderer_channel_endpoint_aliases() {
 }
 
 configure_peer_channel_endpoint_aliases() {
+    if [[ "$PROFILE" == "production" ]]; then
+        return
+    fi
     local orderer_one_ip
     local orderer_two_ip
     local orderer_three_ip
@@ -1397,6 +1583,7 @@ configure_peer_channel_endpoint_aliases() {
     if [[ "$PROFILE" == "production" ]]; then
         apply_manifest "$TMP_K8S_DIR/04b-postgres-replica-annex.yaml"
         apply_manifest "$TMP_K8S_DIR/04c-postgres-replica-pubad.yaml"
+        apply_manifest "$TMP_K8S_DIR/04d-postgres-additional-replicas.yaml"
     fi
 
     apply_manifest "$TMP_K8S_DIR/05-fabric-ca.yaml"
@@ -1405,6 +1592,9 @@ configure_peer_channel_endpoint_aliases() {
     apply_peer_manifest "$TMP_K8S_DIR/07-peer-registrar.yaml"
     apply_peer_manifest "$TMP_K8S_DIR/07-peer-faculty.yaml"
     apply_peer_manifest "$TMP_K8S_DIR/07-peer-department.yaml"
+    if [[ "$PROFILE" == "production" ]]; then
+        apply_peer_manifest "$TMP_K8S_DIR/07-peer-secondary.yaml"
+    fi
     apply_couchdb_health_probes
     configure_peer_channel_endpoint_aliases
     apply_manifest "$TMP_K8S_DIR/08-middleware-api.yaml"
@@ -1466,6 +1656,11 @@ configure_peer_channel_endpoint_aliases() {
     restart_deployment_and_wait peer-registrar plv-main-campus
     restart_deployment_and_wait peer-faculty plv-annex-campus
     restart_deployment_and_wait peer-department plv-pubad-campus
+    if [[ "$PROFILE" == "production" ]]; then
+        restart_deployment_and_wait peer-registrar-2 plv-main-campus
+        restart_deployment_and_wait peer-faculty-2 plv-annex-campus
+        restart_deployment_and_wait peer-department-2 plv-pubad-campus
+    fi
 
     echo "Restarting chaincode deployments sequentially to load the images built from current source..."
     restart_deployment_and_wait registrar-chaincode plv-main-campus
@@ -1544,6 +1739,18 @@ wait_deployments() {
     if [[ "$PROFILE" == "production" ]]; then
         wait_rollout statefulset/postgres-replica-annex plv-annex-campus
         wait_rollout statefulset/postgres-replica-pubad plv-pubad-campus
+        wait_rollout statefulset/postgres-replica-main plv-main-campus
+        wait_rollout statefulset/postgres-replica-annex-2 plv-annex-campus
+        wait_rollout statefulset/postgres-replica-pubad-2 plv-pubad-campus
+        wait_rollout deployment/orderer-4 plv-annex-campus
+        wait_rollout deployment/orderer-5 plv-pubad-campus
+        wait_rollout deployment/orderer-6 plv-pubad-campus
+        wait_rollout statefulset/couchdb-registrar-2 plv-main-campus
+        wait_rollout statefulset/couchdb-faculty-2 plv-annex-campus
+        wait_rollout statefulset/couchdb-department-2 plv-pubad-campus
+        wait_rollout deployment/peer-registrar-2 plv-main-campus
+        wait_rollout deployment/peer-faculty-2 plv-annex-campus
+        wait_rollout deployment/peer-department-2 plv-pubad-campus
     fi
 
     echo "All requested rollouts are ready."
@@ -2166,8 +2373,10 @@ main() {
         apply)
             check_kubectl
             check_cluster
+            validate_production_zone_nodes
             validate_production_image_settings
             inject_configs
+            generate_production_fabric_artifacts
 
             echo "======================================"
             echo "Creating Fabric Crypto Secrets"
@@ -2213,6 +2422,10 @@ main() {
             check_kubectl
             check_cluster
             show_status
+            ;;
+        gke-setup)
+            check_kubectl
+            setup_gke_cluster
             ;;
     esac
 }

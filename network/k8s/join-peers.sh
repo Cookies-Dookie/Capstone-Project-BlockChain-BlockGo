@@ -8,7 +8,11 @@ cd "$(dirname "$0")/.."
 
 PROFILE="${K8S_PROFILE:-local}"
 CHANNEL_NAME="${1:-registrar-channel}"
-CHANNEL_BLOCK="./channel-artifacts-final/${CHANNEL_NAME}.block"
+ARTIFACTS_DIR="./channel-artifacts-final"
+if [[ "$PROFILE" == "production" ]]; then
+    ARTIFACTS_DIR="./channel-artifacts-k8s"
+fi
+CHANNEL_BLOCK="${ARTIFACTS_DIR}/${CHANNEL_NAME}.block"
 
 if [[ "$PROFILE" == "local" ]]; then
     export KUBECTL_REMOTE_COMMAND_WEBSOCKETS="${KUBECTL_REMOTE_COMMAND_WEBSOCKETS:-false}"
@@ -41,8 +45,9 @@ join_peer() {
     local namespace="$2"
     local org="$3"
     local msp_id="$4"
+    local peer_number="${5:-0}"
     local domain="${org}.capstone.com"
-    local tls_override="peer0.${domain}"
+    local tls_override="peer${peer_number}.${domain}"
     local admin_msp="./crypto-config-final-v2/peerOrganizations/${domain}/users/Admin@${domain}/msp"
     local attempts=20
 
@@ -90,5 +95,11 @@ echo "Channel: $CHANNEL_NAME"
 join_peer "peer-registrar" "plv-main-campus" "registrar" "RegistrarMSP"
 join_peer "peer-faculty" "plv-annex-campus" "faculty" "FacultyMSP"
 join_peer "peer-department" "plv-pubad-campus" "department" "DepartmentMSP"
+
+if [[ "$PROFILE" == "production" ]]; then
+    join_peer "peer-registrar-2" "plv-main-campus" "registrar" "RegistrarMSP" 1
+    join_peer "peer-faculty-2" "plv-annex-campus" "faculty" "FacultyMSP" 1
+    join_peer "peer-department-2" "plv-pubad-campus" "department" "DepartmentMSP" 1
+fi
 
 echo "All peers are joined to $CHANNEL_NAME."

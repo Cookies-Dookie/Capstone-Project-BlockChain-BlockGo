@@ -7,6 +7,8 @@
 - `kubectl` CLI installed and configured
 - Sufficient resources: 4 CPU cores and 8GB RAM for the local profile; size
   production clusters from measured load (16GB RAM or more is recommended)
+- Production: Google Cloud SDK, Docker, a GCP project, and three zones in one
+  GKE region
 
 ### 2. Deploy to Kubernetes
 
@@ -21,7 +23,21 @@ chmod +x ./full_deploy.sh
 # The local frontend and API gateway are exposed automatically at:
 # http://localhost:8080
 
-# Production/GKE profile
+# Create or connect to the regional GKE cluster (one node pool node per zone)
+export GCP_PROJECT_ID="your-project"
+export GKE_CLUSTER_NAME="blockgo-production"
+export GKE_REGION="asia-southeast1"
+# Recommended: a least-privilege GKE node service account
+export GKE_NODE_SERVICE_ACCOUNT="blockgo-gke@your-project.iam.gserviceaccount.com"
+./k8s/deploy-k8s.sh production gke-setup
+
+# Generate/refresh Fabric identities first. Production TLS certificates must
+# contain the Kubernetes service DNS names for all six peers and orderers.
+./full_deploy.sh
+
+# Production/GKE profile. Use an Artifact Registry path and immutable tag.
+export PRODUCTION_IMAGE_REPOSITORY="asia-southeast1-docker.pkg.dev/your-project/blockgo"
+export PRODUCTION_IMAGE_TAG="<release-or-commit-sha>"
 ./k8s/deploy-k8s.sh production apply
 
 # Monitor deployment status
@@ -43,9 +59,10 @@ or backend images after a code change. Chaincode Deployments are restarted even
 when their Fabric package IDs are unchanged, ensuring rebuilt chaincode images
 also take effect.
 
-Production deployments use the registry images declared in the manifests.
-Build and publish those images from this same source revision before running
-`production apply`.
+Production `apply` builds and publishes the application images from this source
+revision, generates a separate six-consenter channel block, validates certificate
+expiry, CA chains, private-key matches, and Kubernetes DNS SANs, and then deploys
+the HA topology. Local channel artifacts remain three-consenter artifacts.
 
 The local profile does not create application HPAs because Docker Desktop does
 not expose the `metrics.k8s.io` resource metrics API by default. The production
@@ -145,7 +162,7 @@ reports Prometheus as `not configured`.
 
 ### 5. Fabric Network Bootstrap
 
-`deploy-k8s.sh ... apply` automatically joins all orderers and peers to
+`deploy-k8s.sh ... apply` automatically joins all configured orderers and peers to
 `registrar-channel`, installs the organization-specific CCaaS packages,
 approves and commits the chaincode, and initializes the genesis record.
 
@@ -209,20 +226,38 @@ in PostgreSQL `pending_grade_records` until finalization succeeds.
 
 | Component | Type | Replicas | Storage |
 |-----------|------|----------|---------|
-| PostgreSQL | StatefulSet | 1 | 100Gi |
-| Fabric Orderer | StatefulSet | 1 | 20Gi |
-| Fabric Peer | Deployment | 1 | 50Gi |
+| PostgreSQL | StatefulSet | local: 1; production: 6 (1 writer + 5 streaming standbys) | 100Gi each in production |
+| Fabric Orderer | Deployment | local: 3; production: 6 | 20Gi each |
+| Fabric Peer | Deployment | local: 3; production: 6 (2 per campus) | 50Gi each |
 | Fabric CA | Deployment | 3 | ephemeral |
-| CouchDB | StatefulSet | 1 | 30Gi |
+| Peer state CouchDB | StatefulSet | local: 3; production: 6 | 30Gi each |
 | Middleware gateway and services | Deployments | 2-5 each (HPA) | ephemeral |
 | .NET gateway and services | Deployments | 2-5 each (HPA) | ephemeral |
 | IPFS Nodes | StatefulSet | 3 (Main, Annex, Pubad) | 5Gi per node (10Gi in the local profile) |
 
 ## Storage
 
-- **StorageClass**: `fabric-storage` (host-path provisioner)
-- **Persistent Volumes**: Created on node `/mnt/data/` directories
-- **For production**: Use CSI drivers (AWS EBS, GCP Persistent Disk, Azure Disk, NFS)
+- **Local**: static host-path PVs bind to `fabric-storage`
+- **GKE production**: `fabric-storage` uses the GKE PD CSI driver with
+  `pd-balanced` regional persistent disks and delayed binding
+
+### GKE three-zone placement
+
+The production profile resolves `GKE_ZONE_A`, `GKE_ZONE_B`, and `GKE_ZONE_C`
+from `GKE_REGION` (or from node labels) and replaces manifest placeholders before
+apply. Every campus pair is split across zones, while orderers are balanced two
+per zone. A complete zone loss leaves four of six orderers, which is exactly the
+Raft majority; do not take another orderer down until the zone recovers.
+
+PostgreSQL intentionally has one writable primary and five streaming standbys.
+The manifests do not perform automatic leader election or service failover.
+Promotion and repointing `postgres.plv-main-campus.svc.cluster.local` remain an
+operator recovery procedure; use a PostgreSQL operator/repmgr before promising
+automatic database failover.
+
+The six-consenter block is for a fresh production channel. Do not replace the
+configuration of an existing three-orderer channel with it; add or remove Raft
+consenters one at a time through channel configuration updates.
 
 ### Private IPFS Web UI
 
@@ -318,9 +353,10 @@ kubectl delete namespace plv-fabric plv-main-campus plv-annex-campus plv-pubad-c
 ## Production Considerations
 
 1. **High Availability**
-   - Deploy orderers as StatefulSet with replicas: 3
-   - Deploy peers with anti-affinity rules
-   - Use PodDisruptionBudgets
+   - Six independently persisted orderers are balanced across three zones
+   - Two independently persisted peers are deployed per campus in different zones
+   - PodDisruptionBudgets retain at least one orderer and peer per campus namespace
+   - Six PostgreSQL copies are deployed, but database promotion is deliberately manual
 
 2. **Persistent Storage**
    - Replace host-path with cloud storage (EBS, GCP PD, Azure Disk)

@@ -33,6 +33,8 @@ spec:
         org: orderer
     spec:
       serviceAccountName: orderer-sa
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_A__"
       containers:
       - name: orderer
         image: hyperledger/fabric-orderer:2.5.4

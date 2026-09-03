@@ -18,12 +18,16 @@ if [[ "$PROFILE" == "local" ]]; then
 fi
 
 if [[ "$PROFILE" == "production" ]]; then
-    # For production, use the secure admin port (default 9443) with HTTPS.
+    # The Channel Participation API uses the mTLS admin listener on 7053.
+    # Port 9443 is the operations/metrics endpoint, not the admin API.
     # This requires ORDERER_ADMIN_TLS_ENABLED=true in the orderer's environment.
     ORDERER_ENDPOINTS=(
-        orderer-1.plv-main-campus.svc.cluster.local:9443
-        orderer-2.plv-main-campus.svc.cluster.local:9443
-        orderer-3.plv-annex-campus.svc.cluster.local:9443
+        orderer-1.plv-main-campus.svc.cluster.local:7053
+        orderer-2.plv-main-campus.svc.cluster.local:7053
+        orderer-3.plv-annex-campus.svc.cluster.local:7053
+        orderer-4.plv-annex-campus.svc.cluster.local:7053
+        orderer-5.plv-pubad-campus.svc.cluster.local:7053
+        orderer-6.plv-pubad-campus.svc.cluster.local:7053
     )
 else
     # For local development, use the non-TLS admin port.

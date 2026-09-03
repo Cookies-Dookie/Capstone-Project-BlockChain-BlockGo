@@ -77,12 +77,25 @@ function endpoint(url, pem, serverName) {
 function fabricEndpointUrls() {
     const container = isContainerized();
     const kubernetes = Boolean(process.env.KUBERNETES_SERVICE_HOST);
-    return {
+    const endpoints = {
         registrar: process.env.FABRIC_PEER_REGISTRAR_URL || (kubernetes ? 'grpcs://peer-registrar.plv-main-campus.svc.cluster.local:7051' : container ? 'grpcs://host.docker.internal:7051' : 'grpcs://localhost:7051'),
         faculty: process.env.FABRIC_PEER_FACULTY_URL || (kubernetes ? 'grpcs://peer-faculty.plv-annex-campus.svc.cluster.local:7051' : container ? 'grpcs://host.docker.internal:9051' : 'grpcs://localhost:9051'),
         department: process.env.FABRIC_PEER_DEPARTMENT_URL || (kubernetes ? 'grpcs://peer-department.plv-pubad-campus.svc.cluster.local:7051' : container ? 'grpcs://host.docker.internal:11051' : 'grpcs://localhost:11051'),
         orderer: process.env.FABRIC_ORDERER_URL || (kubernetes ? 'grpcs://orderer-1.plv-main-campus.svc.cluster.local:7050' : container ? 'grpcs://host.docker.internal:7050' : 'grpcs://localhost:7050')
     };
+    if (['1', 'true', 'yes', 'on'].includes(String(process.env.FABRIC_HA_ENABLED || '').trim().toLowerCase())) {
+        Object.assign(endpoints, {
+            registrarSecondary: process.env.FABRIC_PEER_REGISTRAR_2_URL || 'grpcs://peer-registrar-2.plv-main-campus.svc.cluster.local:7051',
+            facultySecondary: process.env.FABRIC_PEER_FACULTY_2_URL || 'grpcs://peer-faculty-2.plv-annex-campus.svc.cluster.local:7051',
+            departmentSecondary: process.env.FABRIC_PEER_DEPARTMENT_2_URL || 'grpcs://peer-department-2.plv-pubad-campus.svc.cluster.local:7051',
+            orderer2: process.env.FABRIC_ORDERER_2_URL || 'grpcs://orderer-2.plv-main-campus.svc.cluster.local:7050',
+            orderer3: process.env.FABRIC_ORDERER_3_URL || 'grpcs://orderer-3.plv-annex-campus.svc.cluster.local:7050',
+            orderer4: process.env.FABRIC_ORDERER_4_URL || 'grpcs://orderer-4.plv-annex-campus.svc.cluster.local:7050',
+            orderer5: process.env.FABRIC_ORDERER_5_URL || 'grpcs://orderer-5.plv-pubad-campus.svc.cluster.local:7050',
+            orderer6: process.env.FABRIC_ORDERER_6_URL || 'grpcs://orderer-6.plv-pubad-campus.svc.cluster.local:7050'
+        });
+    }
+    return endpoints;
 }
 
 function fabricDiscoveryEnabled() {
@@ -107,16 +120,29 @@ function profileForIdentity(identity) {
     profile.orderers = {
         'orderer.capstone.com': endpoint(urls.orderer, tls('orderer'), 'orderer.capstone.com')
     };
+    if (urls.registrarSecondary) {
+        profile.peers['peer1.registrar.capstone.com'] = endpoint(urls.registrarSecondary, tls('registrar'), 'peer1.registrar.capstone.com');
+        profile.peers['peer1.faculty.capstone.com'] = endpoint(urls.facultySecondary, tls('faculty'), 'peer1.faculty.capstone.com');
+        profile.peers['peer1.department.capstone.com'] = endpoint(urls.departmentSecondary, tls('department'), 'peer1.department.capstone.com');
+        for (let number = 2; number <= 6; number += 1) {
+            profile.orderers[`orderer${number}.capstone.com`] = endpoint(urls[`orderer${number}`], tls('orderer'), `orderer${number}.capstone.com`);
+        }
+    }
     const channelName = process.env.CHANNEL_NAME || 'registrar-channel';
     profile.channels = {
         ...(profile.channels || {}),
         [channelName]: {
             ...(profile.channels?.[channelName] || {}),
-            orderers: ['orderer.capstone.com'],
+            orderers: Object.keys(profile.orderers),
             peers: {
                 'peer0.registrar.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
                 'peer0.faculty.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
-                'peer0.department.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true }
+                'peer0.department.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
+                ...(urls.registrarSecondary ? {
+                    'peer1.registrar.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
+                    'peer1.faculty.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true },
+                    'peer1.department.capstone.com': { endorsingPeer: true, chaincodeQuery: true, ledgerQuery: true, eventSource: true }
+                } : {})
             }
         }
     };
@@ -195,9 +221,18 @@ function checkSocket(name, endpointUrl) {
             registrar: 'peer0.registrar.capstone.com',
             faculty: 'peer0.faculty.capstone.com',
             department: 'peer0.department.capstone.com',
-            orderer: 'orderer.capstone.com'
+            registrarSecondary: 'peer1.registrar.capstone.com',
+            facultySecondary: 'peer1.faculty.capstone.com',
+            departmentSecondary: 'peer1.department.capstone.com',
+            orderer: 'orderer.capstone.com',
+            orderer2: 'orderer2.capstone.com',
+            orderer3: 'orderer3.capstone.com',
+            orderer4: 'orderer4.capstone.com',
+            orderer5: 'orderer5.capstone.com',
+            orderer6: 'orderer6.capstone.com'
         };
-        const tlsRoot = secure ? (isContainerized() ? kubernetesTls(name) : localTls(name)) : '';
+        const tlsGroup = name.startsWith('orderer') ? 'orderer' : name.replace('Secondary', '');
+        const tlsRoot = secure ? (isContainerized() ? kubernetesTls(tlsGroup) : localTls(tlsGroup)) : '';
         if (secure && !tlsRoot) {
             reject(new Error(`${name} TLS root is unavailable for readiness validation.`));
             return;
@@ -215,7 +250,23 @@ function checkSocket(name, endpointUrl) {
 }
 
 async function checkFabricEndpoints() {
-    return Object.fromEntries(await Promise.all(Object.entries(fabricEndpointUrls()).map(([name, url]) => checkSocket(name, url))));
+    const endpoints = fabricEndpointUrls();
+    const settled = await Promise.allSettled(Object.entries(endpoints).map(([name, url]) => checkSocket(name, url)));
+    const available = Object.fromEntries(settled.filter((result) => result.status === 'fulfilled').map((result) => result.value));
+    const failures = settled.filter((result) => result.status === 'rejected').map((result) => result.reason.message);
+
+    for (const org of ['registrar', 'faculty', 'department']) {
+        if (!available[org] && !available[`${org}Secondary`]) {
+            throw new Error(`No ${org} peer is reachable. ${failures.join(' ')}`);
+        }
+    }
+    const ordererCount = Object.keys(endpoints).filter((name) => name.startsWith('orderer')).length;
+    const availableOrderers = Object.keys(available).filter((name) => name.startsWith('orderer')).length;
+    const requiredOrderers = Math.floor(ordererCount / 2) + 1;
+    if (availableOrderers < requiredOrderers) {
+        throw new Error(`Fabric orderer quorum is unavailable (${availableOrderers}/${ordererCount}, need ${requiredOrderers}). ${failures.join(' ')}`);
+    }
+    return available;
 }
 
 async function closeGateways() {

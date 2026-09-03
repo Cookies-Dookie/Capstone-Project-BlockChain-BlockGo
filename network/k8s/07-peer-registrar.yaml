@@ -43,6 +43,8 @@ spec:
         org: registrar
     spec:
       serviceAccountName: peer-sa
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_A__"
       initContainers:
       - name: wait-for-couchdb
         image: busybox:1.36.1
@@ -211,6 +213,8 @@ spec:
       labels:
         app: couchdb-registrar
     spec:
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_A__"
       initContainers:
       - name: prepare-couchdb-config
         image: busybox:1.36.1
@@ -314,6 +318,8 @@ spec:
       labels:
         app: couchdb-wallet-registrar
     spec:
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_A__"
       initContainers:
       - name: prepare-couchdb-config
         image: busybox:1.36.1

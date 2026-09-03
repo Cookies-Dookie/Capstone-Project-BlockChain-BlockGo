@@ -7,6 +7,13 @@ set -euo pipefail
 
 CRYPTO_DIR="./crypto-config-final-v2"
 CA_DIR="./fabric-ca"
+PROFILE="${K8S_PROFILE:-local}"
+TLS_MIN_VALIDITY_SECONDS="${TLS_MIN_VALIDITY_SECONDS:-2592000}"
+ARTIFACTS_DIR="./channel-artifacts-final"
+
+if [[ "$PROFILE" == "production" ]]; then
+    ARTIFACTS_DIR="./channel-artifacts-k8s"
+fi
 
 NAMESPACE_FABRIC="plv-fabric"
 NAMESPACE_MAIN="plv-main-campus"
@@ -171,6 +178,35 @@ validate_key_matches_certificate() {
 }
 
 
+validate_tls_certificate() {
+    local cert_file="$1"
+    local ca_file="$2"
+    local dns_name="$3"
+
+    if ! openssl x509 -in "$cert_file" -noout -checkend "$TLS_MIN_VALIDITY_SECONDS" >/dev/null; then
+        echo "ERROR: TLS certificate is expired or has less than ${TLS_MIN_VALIDITY_SECONDS} seconds remaining:"
+        echo "  $cert_file"
+        return 1
+    fi
+
+    if ! openssl verify -CAfile "$ca_file" "$cert_file" >/dev/null; then
+        echo "ERROR: TLS certificate does not verify against its configured CA:"
+        echo "  Certificate: $cert_file"
+        echo "  CA:          $ca_file"
+        return 1
+    fi
+
+    if [[ "$PROFILE" == "production" ]] &&
+       ! openssl x509 -in "$cert_file" -noout -checkhost "$dns_name" >/dev/null; then
+        echo "ERROR: Production TLS certificate is missing Kubernetes DNS SAN:"
+        echo "  Certificate: $cert_file"
+        echo "  Required SAN: $dns_name"
+        echo "Regenerate crypto with ./full_deploy.sh before deploying to GKE."
+        return 1
+    fi
+}
+
+
 apply_secret() {
     local namespace="$1"
     shift
@@ -193,6 +229,12 @@ create_ca_secret() {
 
     local secret_name="ca-${org}-identity"
     local src_dir="${CA_DIR}/${org}"
+    local service_dns=""
+    case "$org" in
+        registrar) service_dns="ca-registrar.${NAMESPACE_MAIN}.svc.cluster.local" ;;
+        faculty) service_dns="ca-faculty.${NAMESPACE_ANNEX}.svc.cluster.local" ;;
+        department) service_dns="ca-department.${NAMESPACE_PUBAD}.svc.cluster.local" ;;
+    esac
 
     echo ""
     echo "======================================"
@@ -207,6 +249,7 @@ create_ca_secret() {
 
     require_file "${src_dir}/ca-cert.pem"
     require_file "${src_dir}/tls-cert.pem"
+    validate_tls_certificate "${src_dir}/tls-cert.pem" "${src_dir}/ca-cert.pem" "$service_dns"
 
     local ca_key=""
     local tls_key=""
@@ -485,6 +528,14 @@ create_node_secret() {
         return 1
     fi
 
+    local service_name=""
+    if [[ "$type" == "orderer" ]]; then
+        service_name="orderer-${org}"
+    else
+        service_name="peer-${org}"
+    fi
+    validate_tls_certificate "$tls_cert" "$tls_ca" "${service_name}.${ns}.svc.cluster.local"
+
     echo "TLS identity: VALID"
 
     # --------------------------------------------------------
@@ -682,6 +733,11 @@ create_chaincode_tls_secret() {
         return 1
     fi
 
+    validate_tls_certificate \
+        "${path}/signcerts/server.crt" \
+        "${path}/ca-bundle/ca-bundle.pem" \
+        "${org}-chaincode"
+
     apply_secret "$ns" "$secret_name" \
         --from-file="server.crt=${path}/signcerts/server.crt" \
         --from-file="server.key=${path}/keystore/server.key" \
@@ -699,8 +755,8 @@ create_artifact_secret() {
     local namespace="$1"
     local secret_name="fabric-artifacts"
 
-    local genesis="./channel-artifacts-final/orderer.genesis.block"
-    local channel="./channel-artifacts-final/registrar-channel.block"
+    local genesis="${ARTIFACTS_DIR}/orderer.genesis.block"
+    local channel="${ARTIFACTS_DIR}/registrar-channel.block"
 
     echo ""
     echo "Creating artifact secret:"
@@ -785,6 +841,12 @@ create_node_secret \
     "capstone.com" \
     "${NAMESPACE_ANNEX}" \
     "orderer3.capstone.com"
+
+if [[ "$PROFILE" == "production" ]]; then
+    create_node_secret "orderer" "4" "capstone.com" "${NAMESPACE_ANNEX}" "orderer4.capstone.com"
+    create_node_secret "orderer" "5" "capstone.com" "${NAMESPACE_PUBAD}" "orderer5.capstone.com"
+    create_node_secret "orderer" "6" "capstone.com" "${NAMESPACE_PUBAD}" "orderer6.capstone.com"
+fi
 
 
 # ------------------------------------------------------------
@@ -927,6 +989,11 @@ echo "Orderers:"
 echo "  ${NAMESPACE_MAIN}/orderer-1-crypto"
 echo "  ${NAMESPACE_MAIN}/orderer-2-crypto"
 echo "  ${NAMESPACE_ANNEX}/orderer-3-crypto"
+if [[ "$PROFILE" == "production" ]]; then
+    echo "  ${NAMESPACE_ANNEX}/orderer-4-crypto"
+    echo "  ${NAMESPACE_PUBAD}/orderer-5-crypto"
+    echo "  ${NAMESPACE_PUBAD}/orderer-6-crypto"
+fi
 echo ""
 echo "Crypto validation completed successfully."
 echo ""

@@ -32,7 +32,16 @@ data:
   FABRIC_CA_DEPARTMENT_TLS_CERT: /etc/hyperledger/fabric-ca-roots/department-tls-cert.pem
   FABRIC_CA_INSECURE_TLS: "false"
   FABRIC_GATEWAY_TLS_ROOTS: /etc/hyperledger/fabric-gateway-tls
-  FABRIC_DISCOVERY_ENABLED: "false"
+  FABRIC_DISCOVERY_ENABLED: "true"
+  FABRIC_HA_ENABLED: "true"
+  FABRIC_PEER_REGISTRAR_2_URL: grpcs://peer-registrar-2.plv-main-campus.svc.cluster.local:7051
+  FABRIC_PEER_FACULTY_2_URL: grpcs://peer-faculty-2.plv-annex-campus.svc.cluster.local:7051
+  FABRIC_PEER_DEPARTMENT_2_URL: grpcs://peer-department-2.plv-pubad-campus.svc.cluster.local:7051
+  FABRIC_ORDERER_2_URL: grpcs://orderer-2.plv-main-campus.svc.cluster.local:7050
+  FABRIC_ORDERER_3_URL: grpcs://orderer-3.plv-annex-campus.svc.cluster.local:7050
+  FABRIC_ORDERER_4_URL: grpcs://orderer-4.plv-annex-campus.svc.cluster.local:7050
+  FABRIC_ORDERER_5_URL: grpcs://orderer-5.plv-pubad-campus.svc.cluster.local:7050
+  FABRIC_ORDERER_6_URL: grpcs://orderer-6.plv-pubad-campus.svc.cluster.local:7050
   CONNECTION_PROFILE_PATH: /app/connection.json
   GATEWAY_CACHE_MAX_USERS: "500"
   GATEWAY_IDLE_TIMEOUT_MS: "300000"

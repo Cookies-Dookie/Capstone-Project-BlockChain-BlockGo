@@ -378,6 +378,53 @@ spec:
     matchLabels:
       org: orderer
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: orderer-pdb
+  namespace: plv-annex-campus
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {org: orderer}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: orderer-pdb
+  namespace: plv-pubad-campus
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {org: orderer}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: registrar-peers-pdb, namespace: plv-main-campus}
+spec:
+  minAvailable: 1
+  selector:
+    matchExpressions:
+    - {key: app, operator: In, values: [peer-registrar, peer-registrar-2]}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: faculty-peers-pdb, namespace: plv-annex-campus}
+spec:
+  minAvailable: 1
+  selector:
+    matchExpressions:
+    - {key: app, operator: In, values: [peer-faculty, peer-faculty-2]}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: department-peers-pdb, namespace: plv-pubad-campus}
+spec:
+  minAvailable: 1
+  selector:
+    matchExpressions:
+    - {key: app, operator: In, values: [peer-department, peer-department-2]}
+---
 apiVersion: v1
 kind: ResourceQuota
 metadata:

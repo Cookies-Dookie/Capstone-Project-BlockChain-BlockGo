@@ -43,6 +43,8 @@ spec:
         org: faculty
     spec:
       serviceAccountName: fabric-sa
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_B__"
       initContainers:
       - name: prepare-couchdb-config
         image: busybox:1.36.1
@@ -154,6 +156,8 @@ spec:
         org: faculty
     spec:
       serviceAccountName: peer-sa
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_B__"
       initContainers:
       - name: wait-for-couchdb
         image: busybox:1.36.1
@@ -346,6 +350,8 @@ spec:
       labels:
         app: couchdb-wallet-faculty
     spec:
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_B__"
       initContainers:
       - name: prepare-couchdb-config
         image: busybox:1.36.1

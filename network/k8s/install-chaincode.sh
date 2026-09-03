@@ -45,6 +45,16 @@ declare -A ORG_PEER_SERVICE=(
     [faculty]="peer-faculty"
     [department]="peer-department"
 )
+declare -A ORG_SECONDARY_PEER_HOST=(
+    [registrar]="peer1.registrar.capstone.com"
+    [faculty]="peer1.faculty.capstone.com"
+    [department]="peer1.department.capstone.com"
+)
+declare -A ORG_SECONDARY_PEER_SERVICE=(
+    [registrar]="peer-registrar-2"
+    [faculty]="peer-faculty-2"
+    [department]="peer-department-2"
+)
 declare -A ORG_CHAINCODE_SERVICE=(
     [registrar]="registrar-chaincode"
     [faculty]="faculty-chaincode"
@@ -133,10 +143,11 @@ wait_for_cli() {
     return 1
 }
 
-peer_exec() {
+peer_exec_at() {
     local org="$1"
-    local tls_host_override="${PEER_TLS_HOST_OVERRIDE-${ORG_PEER_HOST[$org]}}"
-    shift
+    local peer_host="$2"
+    local tls_host_override="${PEER_TLS_HOST_OVERRIDE-$peer_host}"
+    shift 2
 
     MSYS_NO_PATHCONV=1 kubectl exec -n "$CLI_NAMESPACE" "$CLI_POD" -c cli -- env \
         CORE_PEER_TLS_ENABLED=true \
@@ -144,8 +155,14 @@ peer_exec() {
         CORE_PEER_TLS_SERVERHOSTOVERRIDE="$tls_host_override" \
         CORE_PEER_LOCALMSPID="${ORG_MSP[$org]}" \
         CORE_PEER_MSPCONFIGPATH="$REMOTE_DIR/$org/admin-msp" \
-        CORE_PEER_ADDRESS="${ORG_PEER_HOST[$org]}:7051" \
+        CORE_PEER_ADDRESS="${peer_host}:7051" \
         "$@"
+}
+
+peer_exec() {
+    local org="$1"
+    shift
+    peer_exec_at "$org" "${ORG_PEER_HOST[$org]}" "$@"
 }
 
 stage_cli_files() {
@@ -185,20 +202,37 @@ stage_cli_files() {
         }
         kubectl exec -n "$CLI_NAMESPACE" "$CLI_POD" -c cli -- sh -c \
             "grep -Fq '${ORG_PEER_HOST[$org]}' /etc/hosts || printf '\n%s %s\n' '$service_ip' '${ORG_PEER_HOST[$org]}' >> /etc/hosts"
+
+        if [[ "$PROFILE" == "production" ]]; then
+            service_ip="$(kubectl get service "${ORG_SECONDARY_PEER_SERVICE[$org]}" -n "$namespace" -o jsonpath='{.spec.clusterIP}')"
+            [[ -n "$service_ip" ]] || {
+                echo "ERROR: Could not resolve secondary peer service for $org." >&2
+                return 1
+            }
+            kubectl exec -n "$CLI_NAMESPACE" "$CLI_POD" -c cli -- sh -c \
+                "grep -Fq '${ORG_SECONDARY_PEER_HOST[$org]}' /etc/hosts || printf '\n%s %s\n' '$service_ip' '${ORG_SECONDARY_PEER_HOST[$org]}' >> /etc/hosts"
+        fi
     done
 }
 
 install_packages() {
     for org in "${ORGS[@]}"; do
-        local installed
-        installed="$(peer_exec "$org" peer lifecycle chaincode queryinstalled)"
-        if grep -Fq "${PACKAGE_IDS[$org]}" <<<"$installed"; then
-            echo "[SKIP] ${ORG_MSP[$org]} already has ${PACKAGE_IDS[$org]}."
-            continue
+        local peer_hosts=("${ORG_PEER_HOST[$org]}")
+        if [[ "$PROFILE" == "production" ]]; then
+            peer_hosts+=("${ORG_SECONDARY_PEER_HOST[$org]}")
         fi
+        local peer_host
+        for peer_host in "${peer_hosts[@]}"; do
+            local installed
+            installed="$(peer_exec_at "$org" "$peer_host" peer lifecycle chaincode queryinstalled)"
+            if grep -Fq "${PACKAGE_IDS[$org]}" <<<"$installed"; then
+                echo "[SKIP] $peer_host already has ${PACKAGE_IDS[$org]}."
+                continue
+            fi
 
-        echo "[INSTALL] Installing the $org CCaaS package..."
-        peer_exec "$org" peer lifecycle chaincode install "$REMOTE_DIR/$org.tar.gz"
+            echo "[INSTALL] Installing the $org CCaaS package on $peer_host..."
+            peer_exec_at "$org" "$peer_host" peer lifecycle chaincode install "$REMOTE_DIR/$org.tar.gz"
+        done
     done
 }
 

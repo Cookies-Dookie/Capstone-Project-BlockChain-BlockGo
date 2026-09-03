@@ -46,6 +46,8 @@ spec:
         campus: main
     spec:
       serviceAccountName: fabric-sa
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_A__"
       securityContext:
         runAsUser: 0
         runAsGroup: 0
@@ -393,6 +395,8 @@ spec:
         campus: annex
     spec:
       serviceAccountName: fabric-sa
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_B__"
       securityContext: { runAsUser: 0, runAsGroup: 0, fsGroup: 0 }
       initContainers:
       - name: fix-permissions
@@ -465,6 +469,8 @@ spec:
         campus: pubad
     spec:
       serviceAccountName: fabric-sa
+      nodeSelector:
+        topology.kubernetes.io/zone: "__GKE_ZONE_C__"
       securityContext: { runAsUser: 0, runAsGroup: 0, fsGroup: 0 }
       initContainers:
       - name: fix-permissions
