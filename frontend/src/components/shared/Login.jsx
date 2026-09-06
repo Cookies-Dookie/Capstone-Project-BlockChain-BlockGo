@@ -275,7 +275,7 @@ const Login = ({ onLogin }) => {
           {/* FORGOT PASSWORD FORM */}
           {currentView === 'forgotPassword' && (
             <form className="login-form" onSubmit={handleForgotPassword}>
-              <p style={{ textAlign: 'center', marginBottom: '15px', color: '#666' }}>Enter your email to receive a password reset OTP.</p>
+              
               <div className="input-group">
                 <label>Email</label>
                 <input type="email" placeholder="Your registered email" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -289,7 +289,7 @@ const Login = ({ onLogin }) => {
           {/* RESET PASSWORD FORM */}
           {currentView === 'resetPassword' && (
             <form className="login-form" onSubmit={handleResetSubmit}>
-              <p style={{ textAlign: 'center', marginBottom: '15px', color: '#666' }}>Enter the OTP sent to your email and create a new password.</p>
+              
               <div className="input-group">
                 <label>Reset OTP</label>
                 <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" placeholder="6-digit OTP" value={resetOtp} onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ''))} required />

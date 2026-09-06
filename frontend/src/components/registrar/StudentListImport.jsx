@@ -29,9 +29,7 @@ export function StudentSubmissionLogs() {
           <h3 className="text-xl font-bold text-[#003366]">
             Submission Logs
           </h3>
-          <p className="mt-1 text-sm text-slate-500">
-            Track which department files were already imported for sectioning.
-          </p>
+          
         </div>
 
         <button

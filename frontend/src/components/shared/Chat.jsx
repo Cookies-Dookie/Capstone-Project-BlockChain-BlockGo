@@ -1512,7 +1512,7 @@ const Chat = ({
             <div className={`mb-3 text-xs font-bold uppercase tracking-wide ${isChatDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Recent conversations</div>
             {activeConversationUsers.length === 0 ? (
               <div className="flex h-40 items-center justify-center text-center">
-                <p className="text-sm text-slate-400">Select a person below to start chatting.</p>
+                
               </div>
             ) : activeConversationUsers.map((user) => (
               <button

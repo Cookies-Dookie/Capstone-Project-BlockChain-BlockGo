@@ -85,7 +85,7 @@ const RegistrarAccountManagement = () => {
       </form> : <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">The two-Registrar limit has been reached. Update an existing account or delete one to create another Registrar.</div>}
     </section>
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex justify-between"><div><h2 className="text-xl font-bold text-[#003366]">Registrar Access</h2><p className="text-sm text-slate-500">Update email or password, or delete an account to free a Registrar slot.</p></div><button onClick={load} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold">Refresh</button></div>
+      <div className="mb-4 flex justify-between"><div><h2 className="text-xl font-bold text-[#003366]">Registrar Access</h2></div><button onClick={load} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold">Refresh</button></div>
       {loading ? <p className="py-8 text-center text-slate-500">Loading accounts…</p> : <div className="space-y-4">{accounts.map((account) => {
         const edit = edits[account.id] || {};
         const updateEdit = (changes) => setEdits((current) => ({ ...current, [account.id]: { ...edit, ...changes } }));

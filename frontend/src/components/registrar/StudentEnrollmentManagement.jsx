@@ -196,7 +196,7 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
             <button type="button" disabled={saving} onClick={() => upload('enroll')} className="rounded-xl bg-[#003366] px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : 'Upload & Enroll'}</button>
           </div>
         </div> : <form onSubmit={enrollManualStudent} className="pt-4">
-          <div className="mb-4 flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-lg text-blue-700">♙</span><div><h5 className="text-sm font-bold text-[#003366]">Manual Student Enrollment</h5><p className="text-[10px] text-slate-500">Add a student manually by entering their information below.</p></div></div>
+          <div className="mb-4 flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-lg text-blue-700">♙</span><div><h5 className="text-sm font-bold text-[#003366]">Manual Student Enrollment</h5></div></div>
           <div className="overflow-hidden rounded-lg border border-slate-200">
             <h6 className="bg-slate-50 px-4 py-3 text-xs font-bold text-[#003366]">Student Information</h6>
             <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
@@ -210,7 +210,7 @@ const StudentEnrollmentManagement = ({ programs = [] }) => {
               ].map(([field, label, placeholder, required, type]) => <label key={field} className="text-[10px] font-semibold text-slate-700">{label}{required && <span className="text-red-500"> *</span>}<input required={required} type={type} value={manualForm[field]} onChange={(event) => setManualForm((current) => ({ ...current, [field]: event.target.value }))} placeholder={placeholder} className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-3 text-xs font-normal outline-none focus:border-blue-600" /></label>)}
               <label className="text-[10px] font-semibold text-slate-700 md:col-span-2 xl:col-span-3">Home Address <span className="text-red-500">*</span><textarea required value={manualForm.homeAddress} onChange={(event) => setManualForm((current) => ({ ...current, homeAddress: event.target.value }))} placeholder="Enter complete home address" rows="2" className="mt-1 w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs font-normal outline-none focus:border-blue-600" /></label>
             </div>
-            <p className="mx-4 rounded-lg bg-blue-50 px-3 py-2 text-[10px] text-blue-700">● &nbsp; After saving, the student will receive a Student ID and can be enrolled in a department.</p>
+            
             <div className="mt-4 flex justify-end gap-2 border-t border-slate-100 p-4"><button type="button" onClick={() => setManualForm({ firstName: '', lastName: '', middleName: '', birthdate: '', email: '', contactNumber: '', homeAddress: '' })} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-bold text-slate-600">Cancel</button><button disabled={saving || loading} className="rounded-lg bg-[#003366] px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : '♙  Save Student'}</button></div>
           </div>
         </form>}

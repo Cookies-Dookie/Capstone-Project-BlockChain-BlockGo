@@ -1551,7 +1551,7 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
                                     <div className="mb-6 rounded-xl bg-slate-50 p-5 border border-slate-200 flex flex-col md:flex-row md:items-end gap-4">
                                         <div className="flex-1">
                                             <h3 className="font-bold text-emerald-700 mb-2">Enroll Missing Students</h3>
-                                            <p className="text-sm text-slate-500 mb-4">Upload a CSV/Excel file to add students to this section.</p>
+                                            
                                             <input 
                                                 id="myclass-student-enroll-upload"
                                                 type="file" 
@@ -1711,7 +1711,7 @@ const DeptAdminGradesView = ({ loggedInEmail = '', loggedInName = '', userRole =
                         </div>
                     )}
                     {activeChairTab === 'assignment' && (
-                        <AcademicAssignment chairpersonDepartment={department} />
+                        <AcademicAssignment key={department} chairpersonDepartment={department} />
                     )}
                 </main>
             </div>

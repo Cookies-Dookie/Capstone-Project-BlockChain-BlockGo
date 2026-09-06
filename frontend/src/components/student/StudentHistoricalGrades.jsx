@@ -37,7 +37,7 @@ const StudentHistoricalGrades = ({ grades = [], loading = false, error = '', emp
     return (
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <h2 className="text-xl font-bold text-[#003366]">My Grades</h2>
-        <p className="mt-1 text-sm text-slate-500">Finalized, read-only academic records from 1st through 4th Year.</p>
+        
         <div className="mt-5 rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
           {emptyMessage || 'There are currently no grade records available.'}
         </div>
@@ -49,7 +49,7 @@ const StudentHistoricalGrades = ({ grades = [], loading = false, error = '', emp
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
       <div className="mb-5">
         <h2 className="text-xl font-bold text-[#003366]">My Grades</h2>
-        <p className="mt-1 text-sm text-slate-500">Finalized, read-only academic records from 1st through 4th Year.</p>
+        
       </div>
 
       <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-4" role="tablist" aria-label="Grade year level">

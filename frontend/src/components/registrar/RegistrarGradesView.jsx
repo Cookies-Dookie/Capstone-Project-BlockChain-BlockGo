@@ -880,7 +880,7 @@ const RegistrarGradesView = ({
                         <div className="space-y-3">
                             <div>
                                 <h2 className="text-xl font-bold text-slate-900">Department Sections</h2>
-                                <p className="mt-0.5 text-xs text-slate-500">Generate sections, manage student assignments, and review removed students for the selected department.</p>
+                                
                             </div>
                             <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:grid-cols-[1fr_250px] lg:items-end">
                                 <label className="block">
@@ -897,10 +897,7 @@ const RegistrarGradesView = ({
                                         ))}
                                     </select>
                                 </label>
-                                <div className="flex min-h-11 gap-2 rounded-md border border-blue-200 bg-blue-50/40 p-2 text-[10px] text-slate-600">
-                                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-blue-600 text-[9px] font-bold text-blue-700">i</span>
-                                    <div><p className="font-semibold text-slate-700">Tip</p><p>Generate sections to preview rosters and manage student assignments.</p></div>
-                                </div>
+                                
                             </div>
                             <RegistrarStudentSectioning chairpersonDepartment={sectioningDepartment} />
                         </div>
@@ -955,7 +952,7 @@ const RegistrarGradesView = ({
                                 <aside className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                                     <div className="border-b border-slate-200 px-5 py-4">
                                         <h3 className="text-lg font-bold text-[#003366]">Faculty Encoding Monitoring</h3>
-                                        <p className="mt-1 text-sm text-slate-500">Faculty with `D`, `UD`, `W`, or `INC` records are prioritized at the top.</p>
+                                        
                                     </div>
                                     <div className="max-h-[720px] overflow-y-auto p-4">
                                         {facultyMonitoringList.length === 0 ? (
@@ -1230,9 +1227,7 @@ const RegistrarGradesView = ({
                                             }`}
                                         >
                                             <p className="mt-2 text-base font-bold">{tab.label}</p>
-                                            <p className={`mt-1 text-sm leading-5 ${assignmentTab === tab.id ? 'text-slate-100' : 'text-slate-500'}`}>
-                                                {tab.description}
-                                            </p>
+                                            
                                         </button>
                                     ))}
                                 </div>
@@ -1419,7 +1414,7 @@ const RegistrarGradesView = ({
                                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div>
                                             <h4 className="text-base font-bold text-[#003366]">Chairperson</h4>
-                                            <p className="mt-1 text-sm text-slate-500">View chairperson accounts in alphabetical order by course or program.</p>
+                                            
                                         </div>
                                         <button
                                             type="button"
@@ -1472,7 +1467,7 @@ const RegistrarGradesView = ({
                                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div>
                                             <h4 className="text-base font-bold text-[#003366]">Faculty</h4>
-                                            <p className="mt-1 text-sm text-slate-500">Open the department list first, then pick a department to view faculty accounts in alphabetical order.</p>
+                                            
                                         </div>
                                         <button
                                             type="button"

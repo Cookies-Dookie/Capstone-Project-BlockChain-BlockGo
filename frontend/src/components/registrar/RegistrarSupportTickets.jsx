@@ -86,7 +86,7 @@ const RegistrarSupportTickets = () => {
                   <option value="LOW">Low</option><option value="NORMAL">Normal</option><option value="HIGH">High</option>
                 </select>
               </label>
-              <p className="mt-1 text-[10px] text-slate-500">Select the priority level for this issue.</p>
+              
               <div className="mt-1 flex flex-wrap gap-1.5">{['LOW', 'NORMAL', 'HIGH'].map((level) => <span key={level} className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600"><span className={`h-1.5 w-1.5 rounded-full ${severityStyles[level]}`} />{level.charAt(0) + level.slice(1).toLowerCase()}</span>)}</div>
             </div>
           </div>
@@ -114,13 +114,13 @@ const RegistrarSupportTickets = () => {
 
       <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
         <div className="mb-3 flex items-start justify-between gap-4">
-          <div className="flex gap-2"><Icon className="mt-0.5 h-4 w-4 text-[#073b7a]"><path d="M4 4h16v5a3 3 0 0 0 0 6v5H4v-5a3 3 0 0 0 0-6Z" /><path d="M13 7v2M13 12v1M13 16v1" /></Icon><div><h2 className="text-base font-bold text-slate-800">My Tickets</h2><p className="text-[10px] text-slate-500">View and monitor your support tickets.</p></div></div>
+          <div className="flex gap-2"><Icon className="mt-0.5 h-4 w-4 text-[#073b7a]"><path d="M4 4h16v5a3 3 0 0 0 0 6v5H4v-5a3 3 0 0 0 0-6Z" /><path d="M13 7v2M13 12v1M13 16v1" /></Icon><div><h2 className="text-base font-bold text-slate-800">My Tickets</h2></div></div>
           <button type="button" onClick={load} disabled={loading} className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50"><Icon className="h-3.5 w-3.5"><path d="M20 6v5h-5M4 18v-5h5" /><path d="M6.1 9a7 7 0 0 1 11.4-2.6L20 9M4 15l2.5 2.6A7 7 0 0 0 17.9 15" /></Icon>Refresh</button>
         </div>
 
         {loading ? <p className="rounded-lg border border-slate-200 bg-slate-50 py-12 text-center text-sm text-slate-500">Loading tickets…</p> : <div className="space-y-3">
           {tickets.map((ticket) => <article key={ticket.ticketId} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold text-slate-800">#{ticket.ticketId} · {ticket.title}</h3><span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-800">{ticket.status}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">{ticket.description}</p><p className="mt-2 text-xs text-slate-500">{ticket.severity} · {new Date(ticket.createdAt).toLocaleString()}</p>{ticket.assignedSpecialistLabel && <p className="mt-2 text-xs font-semibold text-indigo-700">Assigned to: {ticket.assignedSpecialistLabel}</p>}{ticket.adminResponse && <div className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800"><strong>System Administrator:</strong> {ticket.adminResponse}</div>}</article>)}
-          {tickets.length === 0 && <div className="flex min-h-20 items-center justify-center rounded-md border border-slate-200 bg-slate-50/70 px-5 py-5 text-center"><div><Icon className="mx-auto h-7 w-7 text-blue-200"><path d="M4 7h5l2 2h9v10H4Z" /><path d="m14 6 4-2-1 4" /></Icon><p className="mt-1.5 text-xs font-bold text-slate-700">No support tickets submitted yet.</p><p className="mt-0.5 text-[10px] text-slate-500">When you submit a ticket, it will appear here.</p></div></div>}
+          {tickets.length === 0 && <div className="flex min-h-20 items-center justify-center rounded-md border border-slate-200 bg-slate-50/70 px-5 py-5 text-center"><div><Icon className="mx-auto h-7 w-7 text-blue-200"><path d="M4 7h5l2 2h9v10H4Z" /><path d="m14 6 4-2-1 4" /></Icon><p className="mt-1.5 text-xs font-bold text-slate-700">No support tickets submitted yet.</p></div></div>}
         </div>}
       </section>
     </div>

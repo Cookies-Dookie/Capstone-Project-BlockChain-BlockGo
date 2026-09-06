@@ -17,7 +17,7 @@ const PasswordResetRequests = () => {
     <div className="mb-3 flex items-start justify-between gap-3">
       <div className="flex items-start gap-2">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M7 6h13M7 12h13M7 18h13"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg></span>
-        <div><h2 className="text-sm font-bold text-slate-800">Password Reset Requests</h2><p className="text-[10px] text-slate-500">View recent password reset requests.</p></div>
+        <div><h2 className="text-sm font-bold text-slate-800">Password Reset Requests</h2></div>
       </div>
       <button type="button" onClick={load} disabled={loading} className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 px-3 py-1.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5"><path d="M20 6v5h-5M4 18v-5h5"/><path d="M6 9a7 7 0 0 1 12-2l2 2M4 15l2 2a7 7 0 0 0 12-2"/></svg>Refresh</button>
     </div>

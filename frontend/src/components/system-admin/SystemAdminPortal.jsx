@@ -106,7 +106,7 @@ function SystemAdminPortal({ adminData, onLogout }) {
                       <div>
                         <p className="text-xs font-bold uppercase text-slate-500">Registrar Support</p>
                         <h2 className="mt-1 text-xl font-bold text-[#003366]">System Error Reports</h2>
-                        <p className="mt-1 text-sm text-slate-500">Recent tickets from Registrar accounts.</p>
+                        
                       </div>
                       <button type="button" onClick={() => setActiveView('tickets')} className="rounded-md bg-[#003366] px-4 py-2 text-sm font-bold text-white">View Error Reports</button>
                     </div>

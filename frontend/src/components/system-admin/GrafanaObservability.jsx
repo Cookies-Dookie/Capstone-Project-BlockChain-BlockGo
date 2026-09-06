@@ -47,9 +47,7 @@ function GrafanaObservability() {
       <div className="border-b border-slate-300 pb-4">
         <p className="text-xs font-bold uppercase text-slate-500">System Admin Only</p>
         <h2 className="mt-1 text-2xl font-bold text-[#003366]">Grafana Observability</h2>
-        <p className="mt-2 text-sm text-slate-500">
-          Kubernetes, APIs, Hyperledger Fabric, PostgreSQL, BlockGO workflows, and Loki logs.
-        </p>
+        
       </div>
 
       <div className="flex flex-wrap gap-2" aria-label="Grafana dashboards">

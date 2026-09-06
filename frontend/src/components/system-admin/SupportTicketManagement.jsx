@@ -80,7 +80,7 @@ const SupportTicketManagement = () => {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 className="text-xl font-bold text-[#003366]">Registrar Error Reports</h2><p className="text-sm text-slate-500">Review tickets and route them only to the four approved support specialists.</p></div>
+        <div><h2 className="text-xl font-bold text-[#003366]">Registrar Error Reports</h2></div>
         <button type="button" onClick={load} disabled={loading} className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">{loading ? 'Refreshing...' : 'Refresh'}</button>
       </div>
 
@@ -88,7 +88,7 @@ const SupportTicketManagement = () => {
 
       <section className="rounded-xl border border-blue-200 bg-blue-50 p-5 shadow-sm">
         <h3 className="text-lg font-bold text-[#003366]">Broadcast Resolution Notice</h3>
-        <p className="mt-1 text-sm text-slate-600">Send a popup to every logged-in user after an issue is fixed. The system automatically adds a two-letter, five-number notice ID.</p>
+        
         <form onSubmit={broadcast} className="mt-4 flex flex-col gap-3 lg:flex-row">
           <textarea required minLength="3" maxLength="1000" rows="3" value={broadcastMessage} onChange={(event) => setBroadcastMessage(event.target.value)} placeholder="Type the message users should receive." className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2" />
           <button disabled={broadcasting} className="self-stretch rounded-lg bg-[#003366] px-5 py-2 font-bold text-white disabled:opacity-50 lg:self-end">{broadcasting ? 'Broadcasting...' : 'Broadcast Notice'}</button>

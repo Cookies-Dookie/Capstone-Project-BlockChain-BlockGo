@@ -406,7 +406,7 @@ function SystemLogs({ grades = [] }) {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-[#003366]">System Activity Logs</h2>
-          <p className="text-sm text-slate-500">Monitor all grade modifications and administrative actions.</p>
+          
         </div>
         <button 
           onClick={handleExportPDF}
